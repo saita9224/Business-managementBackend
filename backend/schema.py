@@ -1,28 +1,34 @@
 import strawberry
 
-# Import app-level schemas
-from authentication.schema import Query as AuthQuery, Mutation as AuthMutation
-from employees.schema import Query as EmployeeQuery, Mutation as EmployeeMutation
+# Import app-level GraphQL schema components
+from authentication.schema import AuthQuery, AuthMutation
+from employees.schema import EmployeeQuery, EmployeeMutation
 
-# JWT Middleware
+# JWT Middleware (now used as an extension)
 from .middleware import JWTMiddleware
 
 
-# Combine Queries (Multi-inheritance)
+# -------------------------------
+# Root Query (combine all queries)
+# -------------------------------
 @strawberry.type
 class Query(AuthQuery, EmployeeQuery):
     pass
 
 
-# Combine Mutations
+# -------------------------------
+# Root Mutation (combine all mutations)
+# -------------------------------
 @strawberry.type
 class Mutation(AuthMutation, EmployeeMutation):
     pass
 
 
-# Create the GraphQL schema
+# -------------------------------
+# Build GraphQL Schema
+# -------------------------------
 schema = strawberry.Schema(
     query=Query,
     mutation=Mutation,
-    extensions=[JWTMiddleware]   # ⭐ Activate JWT middleware
+    extensions=[JWTMiddleware]   # ✔️ Correct placement
 )

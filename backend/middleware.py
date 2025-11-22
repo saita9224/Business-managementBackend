@@ -1,41 +1,38 @@
+import strawberry
+from strawberry.extensions import SchemaExtension
+from strawberry.types import ExecutionContext
 import jwt
-from django.contrib.auth.models import User
 from django.conf import settings
-from jwt import ExpiredSignatureError, InvalidSignatureError, DecodeError
+from django.contrib.auth import get_user_model
 
-SECRET = settings.SECRET_KEY
-ALGORITHM = "HS256"
+User = get_user_model()
 
 
-class JWTMiddleware:
-    async def resolve(self, _next, root, info, *args, **kwargs):
-        request = info.context["request"]
+class JWTMiddleware(SchemaExtension):
 
-        # Default if not authenticated
-        request.user = None
+    def on_request_start(self):
+        context = self.execution_context.context
 
-        auth_header = request.headers.get("Authorization")
+        # Initialize context.user (Django style)
+        setattr(context, "user", None)
 
-        if auth_header:
-            try:
-                prefix, token = auth_header.split(" ")
+        request = context.request
+        auth = request.headers.get("Authorization")
 
-                if prefix.lower() == "bearer":
-                    payload = jwt.decode(
-                        token,
-                        SECRET,
-                        algorithms=[ALGORITHM],
-                        options={"verify_aud": False}  # prevents weird audience errors
-                    )
-                    request.user = User.objects.get(id=payload["user_id"])
+        if not auth:
+            return  # No token provided
 
-            except (ExpiredSignatureError, InvalidSignatureError, DecodeError):
-                request.user = None  # token invalid/expired
+        try:
+            prefix, token = auth.split(" ")
+            if prefix.lower() != "bearer":
+                return
 
-            except User.DoesNotExist:
-                request.user = None  # token valid but user deleted
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+            user = User.objects.get(id=payload["user_id"])
 
-            except Exception:
-                request.user = None  # fallback safe
+            # Attach authenticated user
+            setattr(context, "user", user)
 
-        return await _next(root, info, *args, **kwargs)
+        except Exception:
+            # On any token/DB error → unauthenticated
+            setattr(context, "user", None)

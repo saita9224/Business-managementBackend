@@ -1,9 +1,14 @@
+# authentication/schema.py
+
 import strawberry
 from .mutations import AuthMutation
 
+
 @strawberry.type
 class AuthQuery:
-    # placeholder query (not needed yet)
-    hello_auth: str = "Auth system ready"
+    status: str = "Authentication system operational"
 
-AuthMutationType = AuthMutation
+
+@strawberry.type
+class AuthMutationType(AuthMutation):
+    pass

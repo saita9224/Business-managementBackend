@@ -1,29 +1,42 @@
+# authentication/mutations.py
+
 import strawberry
-from django.contrib.auth.models import User
-from django.contrib.auth import authenticate
-from strawberry.types import Info
+from graphql import GraphQLError
+from employees.models import Employee
 from .services import create_jwt_token
 
+
 @strawberry.type
-class AuthPayload:
-    user_id: int
-    username: str
+class LoginPayload:
     token: str
+    user_id: int
+    name: str
+    role: str
+    
+
 
 @strawberry.type
 class AuthMutation:
 
     @strawberry.mutation
-    def signup(self, username: str, password: str) -> AuthPayload:
-        user = User.objects.create_user(username=username, password=password)
-        token = create_jwt_token(user)
-        return AuthPayload(user_id=user.id, username=user.username, token=token)
+    def login(self, email: str, password: str) -> LoginPayload:
+        
+        # Validate employee
+        try:
+            employee = Employee.objects.get(email=email)
+        except Employee.DoesNotExist:
+            raise GraphQLError("Invalid email or password")
 
-    @strawberry.mutation
-    def login(self, username: str, password: str) -> AuthPayload:
-        user = authenticate(username=username, password=password)
-        if not user:
-            raise Exception("Invalid username or password")
+        # Validate password
+        if not employee.check_password(password):
+            raise GraphQLError("Invalid email or password")
 
-        token = create_jwt_token(user)
-        return AuthPayload(user_id=user.id, username=user.username, token=token)
+        # Create JWT
+        token = create_jwt_token(employee)
+
+        return LoginPayload(
+            token=token,
+            user_id=employee.id,
+            name=employee.name,
+            role=employee.role.name if employee.role else "No Role",
+        )

@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Django specific
+*.log
+*.pot
+*.pyc
+*.sqlite3
+db.sqlite3
+media/
+staticfiles/
+static/
+
+# If you collect static into a different directory, ignore it too:
+# collected_static/
+
+# Environment variables
+.env
+*.env
+
+# IDE / Editor settings
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Byte-compiled / optimized / DLL files
+*.so
+*.pyd
+*.pyo
+*.dll
+
+# Packaging
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+
+# Test / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
