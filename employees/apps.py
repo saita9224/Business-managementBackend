@@ -1,5 +1,4 @@
 # employees/apps.py
-
 from django.apps import AppConfig
 
 
@@ -12,5 +11,4 @@ class EmployeesConfig(AppConfig):
         try:
             load_permissions()
         except Exception:
-            # Prevent failing migrations when tables don't exist yet
             pass
