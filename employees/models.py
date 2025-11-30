@@ -10,8 +10,7 @@ class Employee(models.Model):
     email = models.EmailField(unique=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
 
-    # Remove old "role" field (one-to-many)
-    # Add Many-to-Many through EmployeeRole
+    # Proper Many-to-Many through EmployeeRole
     roles = models.ManyToManyField(
         "Role",
         through="EmployeeRole",
@@ -19,11 +18,11 @@ class Employee(models.Model):
     )
 
     is_active = models.BooleanField(default=True)
-    password = models.CharField(max_length=256)
 
+    password = models.CharField(max_length=256)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # Password Helpers
+    # Password helpers
     def set_password(self, raw_password):
         self.password = make_password(raw_password)
         self.save()
@@ -43,6 +42,13 @@ class Role(models.Model):
     description = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # Many-to-Many: Role → Permission through RolePermission
+    permissions = models.ManyToManyField(
+        "Permission",
+        through="RolePermission",
+        related_name="roles"
+    )
+
     def __str__(self):
         return self.name
 
@@ -51,7 +57,7 @@ class Role(models.Model):
 # PERMISSION MODEL
 # ======================================================
 class Permission(models.Model):
-    name = models.CharField(max_length=150, unique=True)   # NOT "code"
+    name = models.CharField(max_length=150, unique=True)
     description = models.CharField(max_length=250)
 
     def __str__(self):

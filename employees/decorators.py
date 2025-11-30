@@ -3,55 +3,63 @@
 import inspect
 from functools import wraps
 from graphql import GraphQLError
-from .permissions import get_permissions_for_role
+
+from employees.permissions import get_permissions_for_role
 
 
 def permission_required(permission_name: str):
+    """
+    Decorator to check if a user (with multiple roles) has the required permission.
+    """
 
     def decorator(func):
 
+        async def _check_async(root, info, *args, **kwargs):
+            user = info.context.get("user")
+
+            if not user:
+                raise GraphQLError("Authentication required.")
+
+            roles = user.roles.all()
+            if not roles:
+                raise GraphQLError("User has no roles assigned.")
+
+            # UNION of permissions
+            permission_set = set()
+            for role in roles:
+                for perm in role.permissions.all():
+                    permission_set.add(perm.code)
+
+            if permission_name not in permission_set:
+                raise GraphQLError(f"Permission denied: {permission_name}")
+
+            return await func(root, info, *args, **kwargs)
+
+        def _check_sync(root, info, *args, **kwargs):
+            user = info.context.get("user")
+
+            if not user:
+                raise GraphQLError("Authentication required.")
+
+            roles = user.roles.all()
+            if not roles:
+                raise GraphQLError("User has no roles assigned.")
+
+            # UNION of permissions
+            permission_set = set()
+            for role in roles:
+                for perm in role.permissions.all():
+                    permission_set.add(perm.code)
+
+            if permission_name not in permission_set:
+                raise GraphQLError(f"Permission denied: {permission_name}")
+
+            return func(root, info, *args, **kwargs)
+
+        # Choose SYNC / ASYNC based on resolver
         if inspect.iscoroutinefunction(func):
-            # ASYNC version
-            @wraps(func)
-            async def async_wrapper(root, info, *args, **kwargs):
-
-                user = info.context.get("user")
-
-                if not user:
-                    raise GraphQLError("Authentication required.")
-
-                if not user.role:
-                    raise GraphQLError("User has no role assigned.")
-
-                role_permissions = get_permissions_for_role(user.role.name)
-
-                if permission_name not in role_permissions:
-                    raise GraphQLError(f"Permission denied: {permission_name}")
-
-                return await func(root, info, *args, **kwargs)
-
-            return async_wrapper
-
+            return wraps(func)(_check_async)
         else:
-            # SYNC version
-            @wraps(func)
-            def sync_wrapper(root, info, *args, **kwargs):
-
-                user = info.context.get("user")
-
-                if not user:
-                    raise GraphQLError("Authentication required.")
-
-                if not user.role:
-                    raise GraphQLError("User has no role assigned.")
-
-                role_permissions = get_permissions_for_role(user.role.name)
-
-                if permission_name not in role_permissions:
-                    raise GraphQLError(f"Permission denied: {permission_name}")
-
-                return func(root, info, *args, **kwargs)
-
-            return sync_wrapper
+            return wraps(func)(_check_sync)
 
     return decorator
