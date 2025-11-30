@@ -33,7 +33,7 @@ def load_permissions():
 
                 for perm in app_permissions:
                     Permission.objects.get_or_create(
-                        name=perm,
+                        code=perm,
                         defaults={"description": perm}   # simple placeholder
                     )
 

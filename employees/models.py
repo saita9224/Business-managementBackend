@@ -57,6 +57,7 @@ class Role(models.Model):
 # PERMISSION MODEL
 # ======================================================
 class Permission(models.Model):
+    code = models.CharField(max_length=150, unique=True)  # e.g. "expenses.view"
     name = models.CharField(max_length=150, unique=True)
     description = models.CharField(max_length=250)
 

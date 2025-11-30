@@ -1,35 +1,32 @@
-# employees/helpers.py
-
+# employees/helpers.py (fixed)
 from graphql import GraphQLError
-from .models import Permission, RolePermission, EmployeeRole
-
+from .models import RolePermission
 
 def require_permission(info, permission_name: str):
     """
     Database-driven permission checker.
-
-    Use inside resolvers:
-
-        def resolve_all_expenses(root, info):
-            require_permission(info, "expenses.view")
-            return Expense.objects.all()
+    Raises GraphQLError if not allowed.
     """
-
-    user = info.context.get("user")
+    user = None
+    # support both dict-like and attr contexts
+    ctx = info.context
+    try:
+        user = ctx.get("user") if isinstance(ctx, dict) else getattr(ctx, "user", None)
+    except Exception:
+        user = getattr(info.context, "user", None)
 
     if not user:
         raise GraphQLError("Authentication required.")
 
-    # 1. Get user roles
-    roles = user.roles.all()   # because EmployeeRole links user -> Role
-
-    if not roles:
+    # fetch roles (Django queryset)
+    roles = user.roles.all()
+    if not roles.exists():
         raise GraphQLError("User has no role assigned.")
 
-    # 2. Check if any role grants the permission
+    # efficient DB check: does any RolePermission exist?
     allowed = RolePermission.objects.filter(
         role__in=roles,
-        permission__name=permission_name
+        permission__code=permission_name
     ).exists()
 
     if not allowed:

@@ -1,29 +1,40 @@
-# backend/middleware.py
+# backend/middleware.py (improved)
 
 import logging
-import jwt
-from jwt import ExpiredSignatureError, InvalidTokenError
 from django.conf import settings
 from django.contrib.auth import get_user_model
-
 import strawberry
 from strawberry.extensions import SchemaExtension
+
+from authentication.services import decode_jwt_token
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
 class JWTMiddleware(SchemaExtension):
-
     def on_request_start(self):
+        # execution_context.context may be a dict or an object
         context = self.execution_context.context
-        setattr(context, "user", None)
 
-        request = getattr(context, "request", None)
+        # normalize: allow attribute or mapping access
+        def set_user_on_context(ctx, user):
+            try:
+                setattr(ctx, "user", user)
+            except Exception:
+                try:
+                    ctx["user"] = user
+                except Exception:
+                    # final fallback: do nothing
+                    logger.debug("Could not set user on context object")
+
+        set_user_on_context(context, None)
+
+        request = getattr(context, "request", None) or (context.get("request") if isinstance(context, dict) else None)
         if request is None:
             return
 
-        auth_header = request.headers.get("Authorization")
+        auth_header = request.headers.get("Authorization") or request.META.get("HTTP_AUTHORIZATION")
         if not auth_header:
             return
 
@@ -37,25 +48,8 @@ class JWTMiddleware(SchemaExtension):
             logger.debug("Authorization header missing Bearer prefix")
             return
 
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-            user_id = payload.get("user_id")
-
-            if not user_id:
-                logger.debug("Token missing user_id")
-                return
-
-            try:
-                user = User.objects.get(pk=user_id)
-            except User.DoesNotExist:
-                logger.info("User does not exist: id=%s", user_id)
-                return
-
-            setattr(context, "user", user)
-
-        except ExpiredSignatureError:
-            logger.info("Expired JWT token")
-        except InvalidTokenError:
-            logger.info("Invalid JWT token")
-        except Exception as exc:
-            logger.exception("Unexpected JWT error: %s", exc)
+        user = decode_jwt_token(token)  # centralized decode (returns user or None)
+        if user:
+            set_user_on_context(context, user)
+        else:
+            logger.debug("JWT did not decode to a valid user")
