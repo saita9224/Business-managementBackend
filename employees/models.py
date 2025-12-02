@@ -1,3 +1,4 @@
+# employees/models.py
 from django.db import models
 from django.contrib.auth.hashers import make_password, check_password
 
@@ -10,7 +11,6 @@ class Employee(models.Model):
     email = models.EmailField(unique=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
 
-    # Proper Many-to-Many through EmployeeRole
     roles = models.ManyToManyField(
         "Role",
         through="EmployeeRole",
@@ -42,7 +42,6 @@ class Role(models.Model):
     description = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # Many-to-Many: Role → Permission through RolePermission
     permissions = models.ManyToManyField(
         "Permission",
         through="RolePermission",
@@ -57,7 +56,7 @@ class Role(models.Model):
 # PERMISSION MODEL
 # ======================================================
 class Permission(models.Model):
-    code = models.CharField(max_length=150, unique=True)  # e.g. "expenses.view"
+    code = models.CharField(max_length=150, unique=True)
     name = models.CharField(max_length=150, unique=True)
     description = models.CharField(max_length=250)
 
@@ -80,7 +79,7 @@ class RolePermission(models.Model):
 
 
 # ======================================================
-# EMPLOYEE → ROLE (Many-to-Many)
+# EMPLOYEE → ROLE
 # ======================================================
 class EmployeeRole(models.Model):
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
