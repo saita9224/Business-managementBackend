@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'strawberry_django',
 
     "employees",
+    "expenses",
 ]
 
 MIDDLEWARE = [
