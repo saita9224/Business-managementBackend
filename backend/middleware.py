@@ -1,12 +1,17 @@
-# backend/middleware.py (improved)
+# backend/middleware.py
 
 import logging
-from django.conf import settings
 from django.contrib.auth import get_user_model
-import strawberry
 from strawberry.extensions import SchemaExtension
-
 from authentication.services import decode_jwt_token
+
+from expenses.dataloaders import (
+    load_suppliers,
+    load_products,
+    load_payments,   # ← FIXED
+)
+
+from strawberry.dataloader import DataLoader
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -14,42 +19,44 @@ User = get_user_model()
 
 class JWTMiddleware(SchemaExtension):
     def on_request_start(self):
-        # execution_context.context may be a dict or an object
+
         context = self.execution_context.context
 
-        # normalize: allow attribute or mapping access
-        def set_user_on_context(ctx, user):
+        # Normalize context so we can write to it
+        def set_attr(ctx, key, value):
             try:
-                setattr(ctx, "user", user)
+                setattr(ctx, key, value)
             except Exception:
                 try:
-                    ctx["user"] = user
+                    ctx[key] = value
                 except Exception:
-                    # final fallback: do nothing
-                    logger.debug("Could not set user on context object")
+                    logger.debug(f"Could not set {key} on context")
 
-        set_user_on_context(context, None)
+        # -----------------------------
+        # JWT AUTHENTICATION
+        # -----------------------------
+        set_attr(context, "user", None)
 
-        request = getattr(context, "request", None) or (context.get("request") if isinstance(context, dict) else None)
-        if request is None:
-            return
+        request = getattr(context, "request", None) or (
+            context.get("request") if isinstance(context, dict) else None
+        )
+        if request:
+            auth_header = request.headers.get("Authorization") or request.META.get("HTTP_AUTHORIZATION")
 
-        auth_header = request.headers.get("Authorization") or request.META.get("HTTP_AUTHORIZATION")
-        if not auth_header:
-            return
+            if auth_header:
+                parts = auth_header.split()
+                if len(parts) == 2:
+                    prefix, token = parts
+                    if prefix.lower() == "bearer":
+                        user = decode_jwt_token(token)
+                        if user:
+                            set_attr(context, "user", user)
 
-        parts = auth_header.split()
-        if len(parts) != 2:
-            logger.debug("Malformed Authorization header")
-            return
+        # -----------------------------
+        # GRAPHQL DATALOADERS (PER REQUEST)
+        # -----------------------------
+        set_attr(context, "supplier_loader", DataLoader(load_suppliers))
+        set_attr(context, "product_loader", DataLoader(load_products))
+        set_attr(context, "payments_by_expense_loader", DataLoader(load_payments))  # ← FIXED
 
-        prefix, token = parts
-        if prefix.lower() != "bearer":
-            logger.debug("Authorization header missing Bearer prefix")
-            return
-
-        user = decode_jwt_token(token)  # centralized decode (returns user or None)
-        if user:
-            set_user_on_context(context, user)
-        else:
-            logger.debug("JWT did not decode to a valid user")
+        logger.debug("Injected dataloaders into GraphQL context")

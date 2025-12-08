@@ -1,6 +1,12 @@
+# expenses/types.py
+
 import strawberry
 from datetime import date
 from typing import Optional, List
+
+# Django models (only used for field access)
+from .models import ExpenseItem
+from inventory.models import Product
 
 
 # ------------------------------------------------------------
@@ -27,29 +33,66 @@ class ExpensePaymentType:
 
 
 # ------------------------------------------------------------
-# EXPENSE ITEM TYPE
+# PRODUCT TYPE (for resolver return)
+# ------------------------------------------------------------
+@strawberry.type
+class ProductType:
+    id: strawberry.ID
+    name: str
+    buying_price: float
+    selling_price: float
+    stock: float
+    created_at: date
+
+
+# ------------------------------------------------------------
+# EXPENSE ITEM TYPE (DATALOADER ENABLED)
 # ------------------------------------------------------------
 @strawberry.type
 class ExpenseItemType:
     id: strawberry.ID
-    supplier: Optional[SupplierType]
+
+    # required for resolvers to access them
+    supplier_id: Optional[int]
     product_id: Optional[int]
 
     item_name: str
-
-    unit_price: float           # matches Django model
+    unit_price: float
     quantity: float
-    total_price: float          # matches Django model
+    total_price: float
 
-    balance: float              # computed property on model
+    balance: float
     payment_group_id: str
     created_at: date
 
-    payments: List[ExpensePaymentType]
+    # -------------------------------
+    # Supplier via dataloader
+    # -------------------------------
+    @strawberry.field
+    async def supplier(self, info) -> Optional[SupplierType]:
+        if not self.supplier_id:
+            return None
+        return await info.context["supplier_loader"].load(self.supplier_id)
+
+    # -------------------------------
+    # Product via dataloader
+    # -------------------------------
+    @strawberry.field
+    async def product(self, info) -> Optional[ProductType]:
+        if not self.product_id:
+            return None
+        return await info.context["product_loader"].load(self.product_id)
+
+    # -------------------------------
+    # Payments list via dataloader
+    # -------------------------------
+    @strawberry.field
+    async def payments(self, info) -> List[ExpensePaymentType]:
+        return await info.context["payments_by_expense_loader"].load(self.id)
 
 
 # ------------------------------------------------------------
-# EXPENSE DETAILS TYPE  (FIX FOR GraphQL ERROR)
+# EXPENSE DETAILS TYPE
 # ------------------------------------------------------------
 @strawberry.type
 class ExpenseDetailsType:
