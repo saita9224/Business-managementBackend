@@ -17,7 +17,7 @@ def permission_required(permission_name: str):
             async def wrapper(root, info, *args, **kwargs):
 
                 # Extract employee ID for updateEmployee(id: ...)
-                target_employee_id = kwargs.get("id")
+                target_employee_id = kwargs.get("id") or kwargs.get("employee_id")
 
                 require_permission(info, permission_name, target_employee_id)
                 return await func(root, info, *args, **kwargs)

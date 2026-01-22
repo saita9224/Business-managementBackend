@@ -4,6 +4,7 @@ import jwt
 from datetime import datetime, timedelta
 from django.conf import settings
 from typing import Optional
+from django.utils import timezone
 
 from employees.models import Employee
 
@@ -12,11 +13,12 @@ ALGORITHM = getattr(settings, "JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRES = getattr(settings, "JWT_ACCESS_EXPIRES_SECONDS", 3600)  # 1 hour
 
 def create_jwt_token(employee: Employee, expires_in: int = ACCESS_TOKEN_EXPIRES) -> str:
-    now = datetime.utcnow()
+    now = timezone.now()
     payload = {
         "user_id": employee.id,
         "iat": now,
         "exp": now + timedelta(seconds=expires_in),
+        
         # Optional claims you can add:
         # "iss": "your-app-name",
         # "jti": str(uuid.uuid4()),

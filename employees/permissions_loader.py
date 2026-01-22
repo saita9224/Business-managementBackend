@@ -8,6 +8,7 @@ and syncs them into the Permission table.
 import importlib
 from django.apps import apps
 from .models import Permission
+import logging
 
 
 def load_permissions():
@@ -33,4 +34,4 @@ def load_permissions():
         except ModuleNotFoundError:
             continue
 
-    print("✅ Permission Sync Complete")
+    logger = logging.getLogger(__name__)

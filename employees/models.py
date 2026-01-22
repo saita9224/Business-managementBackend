@@ -8,7 +8,7 @@ from django.contrib.auth.hashers import make_password, check_password
 # ======================================================
 class Employee(models.Model):
     name = models.CharField(max_length=100)
-    email = models.EmailField(unique=True)
+    email = models.EmailField(unique=True , db_index=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
 
     roles = models.ManyToManyField(
@@ -25,7 +25,7 @@ class Employee(models.Model):
     # Password helpers
     def set_password(self, raw_password):
         self.password = make_password(raw_password)
-        self.save()
+        
 
     def check_password(self, raw_password):
         return check_password(raw_password, self.password)
@@ -86,7 +86,9 @@ class EmployeeRole(models.Model):
     role = models.ForeignKey(Role, on_delete=models.CASCADE)
 
     class Meta:
-        unique_together = ("employee", "role")
+        indexes = [
+        models.Index(fields=["employee", "role"]),
+        ]
 
     def __str__(self):
         return f"{self.employee.name} → {self.role.name}"
