@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from django.conf import settings
 
 
 class Product(models.Model):
@@ -14,17 +15,16 @@ class Product(models.Model):
     @property
     def current_stock(self):
         """
-        Calculates stock as:
-        sum(IN movements) - sum(OUT movements)
+        Stock = total IN - total OUT
         """
         ins = (
-            self.movements.filter(movement_type="IN")
+            self.movements.filter(movement_type=StockMovement.IN)
             .aggregate(total=models.Sum("quantity"))["total"]
             or 0
         )
 
         outs = (
-            self.movements.filter(movement_type="OUT")
+            self.movements.filter(movement_type=StockMovement.OUT)
             .aggregate(total=models.Sum("quantity"))["total"]
             or 0
         )
@@ -34,23 +34,36 @@ class Product(models.Model):
 
 class StockMovement(models.Model):
     """
-    Unified stock movement history.
-    Handles all IN and OUT transactions.
+    Unified stock movement log.
+    Handles ALL stock changes (IN & OUT).
     """
 
+    # ---- Movement direction ----
+    IN = "IN"
+    OUT = "OUT"
+
     MOVEMENT_TYPES = (
-        ("IN", "Incoming"),
-        ("OUT", "Outgoing"),
+        (IN, "Incoming"),
+        (OUT, "Outgoing"),
     )
 
+    # ---- Business reasons ----
+    PURCHASE = "PURCHASE"
+    RETURN = "RETURN"
+    ADJUSTMENT = "ADJUSTMENT"
+    SALE = "SALE"
+    COOKING = "COOKING"
+    DAMAGED = "DAMAGED"
+    LOST = "LOST"
+
     REASONS = (
-        ("PURCHASE", "Purchase"),
-        ("RETURN", "Return"),
-        ("ADJUSTMENT", "Adjustment"),
-        ("SALE", "Sale"),
-        ("COOKING", "Cooking"),
-        ("DAMAGED", "Damaged"),
-        ("LOST", "Lost"),
+        (PURCHASE, "Purchase"),
+        (RETURN, "Return"),
+        (ADJUSTMENT, "Adjustment"),
+        (SALE, "Sale"),
+        (COOKING, "Cooking"),
+        (DAMAGED, "Damaged"),
+        (LOST, "Lost"),
     )
 
     product = models.ForeignKey(
@@ -63,7 +76,7 @@ class StockMovement(models.Model):
     movement_type = models.CharField(max_length=10, choices=MOVEMENT_TYPES)
     reason = models.CharField(max_length=20, choices=REASONS)
 
-    # Link to expense if IN movement came from a purchase
+    # 🔗 Optional expense link (ONLY for business-funded purchases)
     expense_item = models.ForeignKey(
         "expenses.ExpenseItem",
         null=True,
@@ -72,10 +85,27 @@ class StockMovement(models.Model):
         related_name="stock_movements"
     )
 
-    # Optional grouping ID
+    # 🧾 Who funded this stock?
+    funded_by_business = models.BooleanField(
+        default=True,
+        help_text="False if stock was bought using personal/outside cash"
+    )
+
+    # 👤 Who performed the action (AUDIT CRITICAL)
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="stock_movements"
+    )
+
+    # Optional grouping (bulk purchase, cooking batch, reconciliation)
     group_id = models.CharField(max_length=100, null=True, blank=True)
+
+    notes = models.TextField(blank=True, null=True)
 
     created_at = models.DateTimeField(default=timezone.now)
 
     def __str__(self):
-        return f"{self.product.name} - {self.movement_type} ({self.quantity})"
+        return f"{self.product.name} | {self.movement_type} | {self.quantity}"

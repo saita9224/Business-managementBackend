@@ -7,6 +7,7 @@ from typing import Optional, List
 # Django models (only used for field access)
 from .models import ExpenseItem
 from inventory.models import Product
+from graphql import GraphQLError
 
 
 # ------------------------------------------------------------
@@ -88,6 +89,14 @@ class ExpenseItemType:
     # -------------------------------
     @strawberry.field
     async def payments(self, info) -> List[ExpensePaymentType]:
+        user = info.context.user
+
+        if not user.is_authenticated:
+            raise GraphQLError("Authentication required.")
+
+        if not user.has_permission("expenses.view_payments"):
+            raise GraphQLError("Permission denied: expenses.view_payments")
+
         return await info.context["payments_by_expense_loader"].load(self.id)
 
 
