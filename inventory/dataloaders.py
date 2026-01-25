@@ -23,17 +23,6 @@ async def load_movements_by_product(keys: list[int]):
     return [grouped.get(k, []) for k in keys]
 
 
-# -----------------------------
-# Load expense linked to stock movement
-# -----------------------------
-async def load_expenses_by_movement(keys: list[int]):
-    expenses = await sync_to_async(list)(
-        ExpenseItem.objects.filter(id__in=keys)
-    )
-
-    result = {e.id: e for e in expenses}
-    return [result.get(k) for k in keys]
-
 
 # -----------------------------
 # Loader factory (request scoped)
@@ -43,7 +32,5 @@ def create_dataloaders():
         "movements_by_product_loader": DataLoader(
             load_fn=load_movements_by_product
         ),
-        "expense_by_movement_loader": DataLoader(
-            load_fn=load_expenses_by_movement
-        ),
+       
     }

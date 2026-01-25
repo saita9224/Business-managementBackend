@@ -1,66 +1,123 @@
 from typing import List, Optional
+from datetime import datetime
+
 import strawberry
 from strawberry.types import Info
+from graphql import GraphQLError
 
-from .models import InventoryItem
-from expenses.models import Expense
 from users.types import UserType
 
 
+# ============================================================
+# EXPENSE LINK TYPE (AUDIT / ACCOUNTABILITY)
+# ============================================================
 @strawberry.type
 class ExpenseLinkType:
     """
-    Minimal expense representation linked to inventory actions
+    Minimal expense representation linked to stock movements
     for accountability and audit trails.
     """
     id: strawberry.ID
-    amount: float
-    description: str
-    created_at: str
+    item_name: str
+    total_price: float
+    paid_amount: float
+    balance: float
+    funded_by_business: bool
+    created_at: datetime
     performed_by: Optional[UserType]
 
 
+# ============================================================
+# STOCK MOVEMENT TYPE
+# ============================================================
 @strawberry.type
-class InventoryItemType:
+class StockMovementType:
     """
-    Inventory GraphQL type.
-    Exposes expense linkage for accountability.
+    Immutable record of stock change.
+    """
+    id: strawberry.ID
+    movement_type: str
+    reason: str
+    quantity: float
+    funded_by_business: bool
+    group_id: Optional[str]
+    notes: Optional[str]
+    created_at: datetime
+
+    expense_item_id: Optional[strawberry.ID]
+
+    # -------------------------------
+    # Linked Expense (optional)
+    # -------------------------------
+    @strawberry.field
+    async def expense(self, info: Info) -> Optional[ExpenseLinkType]:
+        if not self.expense_item_id:
+            return None
+
+        expense = await info.context["expense_loader"].load(self.expense_item_id)
+        if not expense:
+            return None
+
+        return ExpenseLinkType(
+            id=expense.id,
+            item_name=expense.item_name,
+            total_price=expense.total_price,
+            paid_amount=expense.total_price - expense.balance,
+            balance=expense.balance,
+            funded_by_business=self.funded_by_business,
+            created_at=expense.created_at,
+            performed_by=expense.performed_by,
+        )
+
+
+# ============================================================
+# PRODUCT (INVENTORY ITEM)
+# ============================================================
+@strawberry.type
+class ProductType:
+    """
+    Inventory Product.
+    Current stock is derived from stock movements.
     """
     id: strawberry.ID
     name: str
-    quantity: float
+    category: Optional[str]
     unit: str
-    created_at: str
-    updated_at: str
-    created_by: Optional[UserType]
-    last_modified_by: Optional[UserType]
+    created_at: datetime
 
+    _current_stock: float = strawberry.private()
+
+    # -------------------------------
+    # Computed stock (safe)
+    # -------------------------------
     @strawberry.field
-    def expenses(self, info: Info) -> List[ExpenseLinkType]:
-        """
-        All expenses associated with this inventory item.
-        Explicitly visible for accountability.
-        """
-        qs = Expense.objects.filter(inventory_item_id=self.id).select_related(
-            "performed_by"
-        )
-        return [
-            ExpenseLinkType(
-                id=e.id,
-                amount=e.amount,
-                description=e.description,
-                created_at=e.created_at.isoformat(),
-                performed_by=e.performed_by,
-            )
-            for e in qs
-        ]
+    def current_stock(self) -> float:
+        return self._current_stock
+
+    # -------------------------------
+    # Stock movements
+    # -------------------------------
+    @strawberry.field
+    async def movements(self, info: Info) -> List[StockMovementType]:
+        user = info.context.user
+
+        if not user.is_authenticated:
+            raise GraphQLError("Authentication required")
+
+        if not user.has_permission("inventory.view_movements"):
+            raise GraphQLError("Permission denied: inventory.view_movements")
+
+        return await info.context["movements_by_product_loader"].load(self.id)
 
 
+# ============================================================
+# INVENTORY AUDIT TYPE (MANAGEMENT / READ-ONLY)
+# ============================================================
 @strawberry.type
 class InventoryAuditType:
     """
-    Read-only audit-focused view combining inventory and expense context.
-    Useful for managers and finance.
+    High-level audit view combining product, movements, and expenses.
+    Intended for management, accounting, and compliance.
     """
-    inventory: InventoryItemType
-    expenses: List[ExpenseLinkType]
+    product: ProductType
+    movements: List[StockMovementType]
