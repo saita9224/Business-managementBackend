@@ -1,12 +1,14 @@
 from django.db import transaction
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
-from .models import Product, StockMovement
+from .models import (
+    Product,
+    StockMovement,
+    StockReconciliation,
+)
 
-
-# ───────────────────────────────────────────────
-# STOCK IN
-# ───────────────────────────────────────────────
+# =========STOCK IN======
 
 @transaction.atomic
 def add_stock(
@@ -18,10 +20,10 @@ def add_stock(
     expense_item=None,
     funded_by_business: bool = True,
     group_id: str | None = None,
-    notes: str | None = None
+    notes: str | None = None,
 ) -> StockMovement:
     """
-    Adds stock to inventory.
+    Adds stock to inventory (IN movement).
     """
 
     if quantity <= 0:
@@ -30,7 +32,11 @@ def add_stock(
     if performed_by is None:
         raise ValidationError("performed_by user is required")
 
-    if funded_by_business and expense_item is None and reason == StockMovement.PURCHASE:
+    if (
+        funded_by_business
+        and reason == StockMovement.PURCHASE
+        and expense_item is None
+    ):
         raise ValidationError(
             "Business-funded purchases must be linked to an expense item"
         )
@@ -47,10 +53,7 @@ def add_stock(
         performed_by=performed_by,
     )
 
-
-# ───────────────────────────────────────────────
-# STOCK OUT
-# ───────────────────────────────────────────────
+# =========STOCK OUT======
 
 @transaction.atomic
 def remove_stock(
@@ -60,10 +63,10 @@ def remove_stock(
     reason: str,
     performed_by,
     group_id: str | None = None,
-    notes: str | None = None
+    notes: str | None = None,
 ) -> StockMovement:
     """
-    Removes stock from inventory.
+    Removes stock from inventory (OUT movement).
     Prevents negative stock.
     """
 
@@ -89,43 +92,84 @@ def remove_stock(
     )
 
 
-# ───────────────────────────────────────────────
-# STOCK ADJUSTMENT (ADMIN / AUDIT)
-# ───────────────────────────────────────────────
+# =========APPROVE RECONCILIATION (CREATES ADJUSTMENT)======
 
 @transaction.atomic
-def adjust_stock(
+def approve_reconciliation(
     *,
-    product: Product,
-    new_quantity: float,
-    performed_by,
-    notes: str | None = None
-):
+    reconciliation: StockReconciliation,
+    approved_by,
+) -> StockMovement | None:
     """
-    Adjusts stock to match a physical count.
-    Creates either IN or OUT adjustment.
+    Approves a stock reconciliation and creates an ADJUSTMENT movement.
     """
 
-    if performed_by is None:
-        raise ValidationError("performed_by user is required")
+    if reconciliation.status != StockReconciliation.PENDING:
+        raise ValidationError("Only pending reconciliations can be approved")
 
-    if new_quantity < 0:
-        raise ValidationError("Stock cannot be negative")
+    if approved_by is None:
+        raise ValidationError("approved_by user is required")
 
-    current = product.current_stock
-    difference = new_quantity - current
+    reconciliation.status = StockReconciliation.APPROVED
+    reconciliation.approved_by = approved_by
+    reconciliation.approved_at = timezone.now()
+    reconciliation.save(update_fields=[
+        "status",
+        "approved_by",
+        "approved_at",
+    ])
 
-    if difference == 0:
-        return None
+    if reconciliation.difference == 0:
+        return None  # No adjustment needed
+
+    movement_type = (
+        StockMovement.IN
+        if reconciliation.difference > 0
+        else StockMovement.OUT
+    )
 
     return StockMovement.objects.create(
-        product=product,
-        quantity=abs(difference),
-        movement_type=(
-            StockMovement.IN if difference > 0 else StockMovement.OUT
-        ),
+        product=reconciliation.product,
+        quantity=abs(reconciliation.difference),
+        movement_type=movement_type,
         reason=StockMovement.ADJUSTMENT,
         funded_by_business=False,
-        notes=notes,
-        performed_by=performed_by,
+        performed_by=approved_by,
+        group_id=f"recon-{reconciliation.id}",
+        notes="Stock reconciliation adjustment",
     )
+
+
+# ==========REJECT RECONCILIATION======
+
+@transaction.atomic
+def reject_reconciliation(
+    *,
+    reconciliation: StockReconciliation,
+    rejected_by,
+    notes: str | None = None,
+) -> StockReconciliation:
+    """
+    Rejects a stock reconciliation.
+    No inventory impact.
+    """
+
+    if reconciliation.status != StockReconciliation.PENDING:
+        raise ValidationError("Only pending reconciliations can be rejected")
+
+    if rejected_by is None:
+        raise ValidationError("rejected_by user is required")
+
+    reconciliation.status = StockReconciliation.REJECTED
+    reconciliation.approved_by = rejected_by
+    reconciliation.approved_at = timezone.now()
+    reconciliation.notes = notes
+    reconciliation.save(update_fields=[
+        "status",
+        "approved_by",
+        "approved_at",
+        "notes",
+    ])
+
+    return reconciliation
+

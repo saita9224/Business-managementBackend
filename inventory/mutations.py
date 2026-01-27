@@ -2,7 +2,8 @@ from typing import Optional
 
 import strawberry
 from strawberry.types import Info
-from graphql import GraphQLError
+
+from employees.decorators import permission_required
 
 from .services import (
     create_product,
@@ -55,6 +56,7 @@ class InventoryMutation:
     # CREATE PRODUCT
     # --------------------------------------------------------
     @strawberry.mutation
+    @permission_required("inventory.product.create")
     async def create_product(
         self,
         info: Info,
@@ -62,12 +64,6 @@ class InventoryMutation:
     ) -> ProductType:
 
         user = info.context.user
-
-        if not user.is_authenticated:
-            raise GraphQLError("Authentication required")
-
-        if not user.has_permission("inventory.create_product"):
-            raise GraphQLError("Permission denied: inventory.create_product")
 
         product = await create_product(
             name=input.name,
@@ -83,6 +79,7 @@ class InventoryMutation:
     # ADD STOCK (INBOUND)
     # --------------------------------------------------------
     @strawberry.mutation
+    @permission_required("inventory.stock.in")
     async def add_stock(
         self,
         info: Info,
@@ -90,12 +87,6 @@ class InventoryMutation:
     ) -> StockMovementType:
 
         user = info.context.user
-
-        if not user.is_authenticated:
-            raise GraphQLError("Authentication required")
-
-        if not user.has_permission("inventory.add_stock"):
-            raise GraphQLError("Permission denied: inventory.add_stock")
 
         movement = await add_stock(
             product_id=input.product_id,
@@ -115,6 +106,7 @@ class InventoryMutation:
     # REMOVE STOCK (OUTBOUND)
     # --------------------------------------------------------
     @strawberry.mutation
+    @permission_required("inventory.stock.out")
     async def remove_stock(
         self,
         info: Info,
@@ -122,12 +114,6 @@ class InventoryMutation:
     ) -> StockMovementType:
 
         user = info.context.user
-
-        if not user.is_authenticated:
-            raise GraphQLError("Authentication required")
-
-        if not user.has_permission("inventory.remove_stock"):
-            raise GraphQLError("Permission denied: inventory.remove_stock")
 
         movement = await remove_stock(
             product_id=input.product_id,

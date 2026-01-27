@@ -26,6 +26,10 @@ INVENTORY_PERMISSIONS = [
 
     # Reports / visibility
     "inventory.stock.view_history",
+
+    # Reconciliation / accountability
+    "inventory.stock.reconcile",
+    "inventory.stock.view_discrepancy",
 ]
 
 PERMISSIONS = INVENTORY_PERMISSIONS

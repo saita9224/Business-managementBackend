@@ -2,9 +2,11 @@ from typing import List, Optional
 
 import strawberry
 from strawberry.types import Info
-from graphql import GraphQLError
+from asgiref.sync import sync_to_async
 
-from .models import Product, StockMovement
+from employees.decorators import permission_required
+
+from .models import Product, StockMovement, StockReconciliation
 from .types import (
     ProductType,
     StockMovementType,
@@ -23,6 +25,7 @@ class InventoryQuery:
     # LIST PRODUCTS
     # --------------------------------------------------------
     @strawberry.field
+    @permission_required("inventory.product.view")
     async def products(
         self,
         info: Info,
@@ -30,106 +33,105 @@ class InventoryQuery:
         category: Optional[str] = None,
     ) -> List[ProductType]:
 
-        user = info.context.user
+        def fetch():
+            qs = Product.objects.all().order_by("name")
 
-        if not user.is_authenticated:
-            raise GraphQLError("Authentication required")
+            if search:
+                qs = qs.filter(name__icontains=search)
 
-        if not user.has_permission("inventory.view_product"):
-            raise GraphQLError("Permission denied: inventory.view_product")
+            if category:
+                qs = qs.filter(category=category)
 
-        qs = Product.objects.all().order_by("name")
+            return list(qs)
 
-        if search:
-            qs = qs.filter(name__icontains=search)
-
-        if category:
-            qs = qs.filter(category=category)
-
-        return qs
+        return await sync_to_async(fetch)()
 
 
     # --------------------------------------------------------
-    # SINGLE PRODUCT (DETAIL VIEW)
+    # SINGLE PRODUCT
     # --------------------------------------------------------
     @strawberry.field
+    @permission_required("inventory.product.view")
     async def product(
         self,
         info: Info,
         id: strawberry.ID,
     ) -> ProductType:
 
-        user = info.context.user
-
-        if not user.is_authenticated:
-            raise GraphQLError("Authentication required")
-
-        if not user.has_permission("inventory.view_product"):
-            raise GraphQLError("Permission denied: inventory.view_product")
-
         try:
-            return Product.objects.get(pk=id)
+            return await sync_to_async(Product.objects.get)(pk=id)
         except Product.DoesNotExist:
-            raise GraphQLError("Product not found")
+            raise ValueError("Product not found")
 
 
     # --------------------------------------------------------
-    # STOCK MOVEMENTS (GLOBAL VIEW)
+    # GLOBAL STOCK MOVEMENTS (AUDIT VIEW)
     # --------------------------------------------------------
     @strawberry.field
+    @permission_required("inventory.stock.view")
     async def stock_movements(
         self,
         info: Info,
         product_id: Optional[strawberry.ID] = None,
     ) -> List[StockMovementType]:
 
-        user = info.context.user
+        def fetch():
+            qs = (
+                StockMovement.objects
+                .select_related("product", "expense_item", "performed_by")
+                .order_by("-created_at")
+            )
 
-        if not user.is_authenticated:
-            raise GraphQLError("Authentication required")
+            if product_id:
+                qs = qs.filter(product_id=product_id)
 
-        if not user.has_permission("inventory.view_movements"):
-            raise GraphQLError("Permission denied: inventory.view_movements")
+            return list(qs)
 
-        qs = StockMovement.objects.select_related(
-            "product",
-            "expense_item",
-        ).order_by("-created_at")
-
-        if product_id:
-            qs = qs.filter(product_id=product_id)
-
-        return qs
+        return await sync_to_async(fetch)()
 
 
     # --------------------------------------------------------
-    # INVENTORY AUDIT (MANAGEMENT VIEW)
+    # INVENTORY AUDIT (MANAGEMENT)
     # --------------------------------------------------------
     @strawberry.field
+    @permission_required("inventory.stock.view_history")
     async def inventory_audit(
         self,
         info: Info,
         product_id: strawberry.ID,
     ) -> InventoryAuditType:
 
-        user = info.context.user
-
-        if not user.is_authenticated:
-            raise GraphQLError("Authentication required")
-
-        if not user.has_permission("inventory.view_audit"):
-            raise GraphQLError("Permission denied: inventory.view_audit")
-
         try:
-            product = Product.objects.get(pk=product_id)
+            product = await sync_to_async(Product.objects.get)(pk=product_id)
         except Product.DoesNotExist:
-            raise GraphQLError("Product not found")
+            raise ValueError("Product not found")
 
-        movements = StockMovement.objects.filter(
-            product_id=product_id
-        ).order_by("created_at")
+        movements = await info.context[
+            "movements_by_product_loader"
+        ].load(product.id)
 
         return InventoryAuditType(
             product=product,
             movements=movements,
         )
+
+
+    # --------------------------------------------------------
+    # PENDING STOCK RECONCILIATIONS (PHYSICAL COUNTS)
+    # --------------------------------------------------------
+    @strawberry.field
+    @permission_required("inventory.stock.adjust")
+    async def pending_reconciliations(
+        self,
+        info: Info,
+    ) -> List[StockReconciliation]:
+
+        def fetch():
+            return list(
+                StockReconciliation.objects
+                .filter(status=StockReconciliation.PENDING)
+                .select_related("product", "counted_by")
+                .order_by("-counted_at")
+            )
+
+        return await sync_to_async(fetch)()

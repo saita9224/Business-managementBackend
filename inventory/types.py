@@ -3,8 +3,8 @@ from datetime import datetime
 
 import strawberry
 from strawberry.types import Info
-from graphql import GraphQLError
 
+from employees.decorators import permission_required
 from users.types import UserType
 
 
@@ -95,18 +95,11 @@ class ProductType:
         return self._current_stock
 
     # -------------------------------
-    # Stock movements
+    # Stock movements (permission protected)
     # -------------------------------
     @strawberry.field
+    @permission_required("inventory.stock.view")
     async def movements(self, info: Info) -> List[StockMovementType]:
-        user = info.context.user
-
-        if not user.is_authenticated:
-            raise GraphQLError("Authentication required")
-
-        if not user.has_permission("inventory.view_movements"):
-            raise GraphQLError("Permission denied: inventory.view_movements")
-
         return await info.context["movements_by_product_loader"].load(self.id)
 
 
