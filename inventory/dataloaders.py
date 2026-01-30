@@ -83,7 +83,7 @@ async def load_latest_reconciliation(keys: list[int]):
 # ────────────────────────────────────────────────
 # Loader factory (request scoped)
 # ────────────────────────────────────────────────
-def create_dataloaders():
+def create_inventory_dataloaders():
     return {
         "movements_by_product_loader": DataLoader(
             load_fn=load_movements_by_product

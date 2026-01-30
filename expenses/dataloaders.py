@@ -41,7 +41,7 @@ async def load_expenses_by_supplier(keys: list[int]):
     return [grouped.get(k, []) for k in keys]
 
 
-def create_dataloaders():
+def create_expenses_dataloaders():
     return {
         "supplier_loader": DataLoader(load_fn=load_suppliers),
         "product_loader": DataLoader(load_fn=load_products),
