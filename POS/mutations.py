@@ -1,259 +1,236 @@
 # pos/mutation.py
 
-from typing import Optional, List
-from decimal import Decimal
-from datetime import date
-from uuid import UUID
+from typing import Optional
 
 import strawberry
 from strawberry.types import Info
-from django.core.exceptions import ValidationError, PermissionDenied
 
-from employees.models import Employee
-from employees.permissions import has_permission
+from employees.decorators import permission_required
 
-from . import services
-from .models import Receipt, Order, OrderItem
+from inventory.models import Product
+
+from .models import Receipt, Order
+from .services import (
+    open_pos_session,
+    close_pos_session,
+    create_order,
+    add_order_item,
+    finalize_receipt,
+    accept_payment,
+    create_credit_account,
+    refund_receipt,
+)
 from .types import (
     POSSessionType,
-    ReceiptType,
     OrderType,
+    OrderItemType,
+    ReceiptType,
     PaymentType,
     CreditAccountType,
 )
 
 
-# ======================================================
+# ============================================================
 # INPUT TYPES
-# ======================================================
+# ============================================================
 
 @strawberry.input
-class OrderItemInput:
+class OpenSessionInput:
+    opening_cash: float = 0
+
+
+@strawberry.input
+class CloseSessionInput:
+    session_id: strawberry.ID
+    closing_cash: float
+
+
+@strawberry.input
+class AddOrderItemInput:
+    order_id: strawberry.ID
     product_id: strawberry.ID
-    product_name: str
-    quantity: Decimal
-    unit_price: Decimal
-
-    overridden_price: Optional[Decimal] = None
-    override_reason: Optional[str] = None
+    quantity: float
+    final_price: float
+    price_override_reason: Optional[str] = None
 
 
-# ======================================================
-# POS MUTATIONS
-# ======================================================
+@strawberry.input
+class AcceptPaymentInput:
+    receipt_id: strawberry.ID
+    amount: float
+    method: str
+
+
+@strawberry.input
+class CreateCreditInput:
+    receipt_id: strawberry.ID
+    customer_name: str
+    customer_phone: Optional[str] = None
+    due_date: strawberry.Date
+
+
+@strawberry.input
+class RefundReceiptInput:
+    receipt_id: strawberry.ID
+    reason: str
+
+
+# ============================================================
+# MUTATIONS
+# ============================================================
 
 @strawberry.type
 class POSMutation:
 
-    # -------------------------------
-    # POS SESSION
-    # -------------------------------
+    # ====================== SESSION ======================
 
     @strawberry.mutation
-    def open_pos_session(
+    @permission_required("pos.open_session")
+    async def open_pos_session(
         self,
         info: Info,
-        opening_cash: Decimal = Decimal("0.00"),
+        input: OpenSessionInput,
     ) -> POSSessionType:
-        employee: Employee = info.context["employee"]
 
-        return services.open_pos_session(
-            employee=employee,
-            opening_cash=opening_cash,
+        user = info.context.user
+
+        return open_pos_session(
+            employee=user,
+            opening_cash=input.opening_cash,
         )
 
+
     @strawberry.mutation
-    def close_pos_session(
+    @permission_required("pos.close_session")
+    async def close_pos_session(
         self,
         info: Info,
-        session_id: strawberry.ID,
-        closing_cash: Decimal,
+        input: CloseSessionInput,
     ) -> POSSessionType:
-        employee: Employee = info.context["employee"]
 
-        return services.close_pos_session(
-            employee=employee,
-            session_id=int(session_id),
-            closing_cash=closing_cash,
+        return close_pos_session(
+            session_id=int(input.session_id),
+            closing_cash=input.closing_cash,
         )
 
-    # -------------------------------
-    # RECEIPT & ORDER CREATION
-    # -------------------------------
+
+    # ====================== ORDER ======================
 
     @strawberry.mutation
-    def create_receipt(
-        self,
-        info: Info,
-        session_id: strawberry.ID,
-        receipt_number: str,
-    ) -> ReceiptType:
-        """
-        Creates an EMPTY receipt.
-        Receipt is not valid for payment until orders exist.
-        """
-        employee: Employee = info.context["employee"]
-
-        receipt = Receipt(
-            receipt_number=receipt_number,
-            session_id=int(session_id),
-            created_by=employee,
-            subtotal=Decimal("0.00"),
-            discount=Decimal("0.00"),
-            total=Decimal("0.00"),
-            status="OPEN",
-        )
-        receipt.full_clean()
-        receipt.save()
-
-        return receipt
-
-    @strawberry.mutation
-    def save_order(
+    @permission_required("pos.create_order")
+    async def create_order(
         self,
         info: Info,
         receipt_id: strawberry.ID,
-        items: List[OrderItemInput],
     ) -> OrderType:
-        """
-        Saves an order and emits stock events.
-        POS NEVER blocks sales due to inventory state.
-        """
-        employee: Employee = info.context["employee"]
 
-        if not items:
-            raise ValidationError("An order must contain at least one item.")
-
+        user = info.context.user
         receipt = Receipt.objects.get(pk=int(receipt_id))
 
-        order = Order(
+        return create_order(
             receipt=receipt,
-            created_by=employee,
-            is_saved=True,
+            created_by=user,
         )
-        order.full_clean()
-        order.save()
 
-        for item in items:
-            # ---------------------------
-            # PRICE OVERRIDE VALIDATION
-            # ---------------------------
-            if item.overridden_price is not None:
-                if not has_permission(employee, "pos.override_price"):
-                    raise PermissionDenied("Price override not permitted.")
-
-                if not item.override_reason:
-                    raise ValidationError("Price override reason is required.")
-
-                overridden_price = Decimal(item.overridden_price)
-                effective_price = overridden_price
-            else:
-                overridden_price = None
-                effective_price = Decimal(item.unit_price)
-
-            quantity = Decimal(item.quantity)
-            line_total = quantity * effective_price
-
-            order_item = OrderItem(
-                order=order,
-                product_id=UUID(str(item.product_id)),
-                product_name=item.product_name,
-                quantity=quantity,
-                unit_price=Decimal(item.unit_price),
-                overridden_price=overridden_price,
-                price_override_by=employee if overridden_price else None,
-                line_total=line_total,
-            )
-            order_item.full_clean()
-            order_item.save()
-
-            # ---------------------------
-            # STOCK EMISSION (NON-BLOCKING)
-            # ---------------------------
-            try:
-                services.emit_stock_out(
-                    receipt=receipt,
-                    product_id=order_item.product_id,
-                    quantity=order_item.quantity,
-                )
-            except Exception:
-                # Inventory is advisory — never block POS
-                pass
-
-        services.recalculate_receipt_totals(receipt)
-
-        return order
-
-    # -------------------------------
-    # PAYMENTS
-    # -------------------------------
 
     @strawberry.mutation
-    def accept_payment(
+    @permission_required("pos.create_order")
+    async def add_order_item(
+        self,
+        info: Info,
+        input: AddOrderItemInput,
+    ) -> OrderItemType:
+
+        user = info.context.user
+
+        order = Order.objects.get(pk=int(input.order_id))
+        product = Product.objects.get(pk=int(input.product_id))
+
+        return add_order_item(
+            order=order,
+            product=product,
+            quantity=input.quantity,
+            final_price=input.final_price,
+            price_override_reason=input.price_override_reason,
+            sold_by=user,
+        )
+
+
+    # ====================== RECEIPT ======================
+
+    @strawberry.mutation
+    @permission_required("pos.emit_stock")
+    async def finalize_receipt(
         self,
         info: Info,
         receipt_id: strawberry.ID,
-        amount: Decimal,
-        method: str,
-    ) -> PaymentType:
-        employee: Employee = info.context["employee"]
-
-        receipt = Receipt.objects.get(pk=int(receipt_id))
-        if not receipt.orders.exists():
-            raise ValidationError("Cannot pay for a receipt with no orders.")
-
-        return services.accept_payment(
-            employee=employee,
-            receipt_id=int(receipt_id),
-            amount=amount,
-            method=method,
-        )
-
-    # -------------------------------
-    # CREDIT SALES
-    # -------------------------------
-
-    @strawberry.mutation
-    def create_credit_sale(
-        self,
-        info: Info,
-        receipt_id: strawberry.ID,
-        customer_name: str,
-        customer_phone: Optional[str],
-        due_date: date,
-    ) -> CreditAccountType:
-        employee: Employee = info.context["employee"]
-
-        receipt = Receipt.objects.get(pk=int(receipt_id))
-        if not receipt.orders.exists():
-            raise ValidationError("Cannot credit a receipt with no orders.")
-
-        return services.create_credit_sale(
-            employee=employee,
-            receipt_id=int(receipt_id),
-            customer_name=customer_name,
-            customer_phone=customer_phone,
-            due_date=due_date,
-        )
-
-    # -------------------------------
-    # REFUNDS
-    # -------------------------------
-
-    @strawberry.mutation
-    def refund_receipt(
-        self,
-        info: Info,
-        receipt_id: strawberry.ID,
-        reason: str,
     ) -> ReceiptType:
-        employee: Employee = info.context["employee"]
 
-        if not reason:
-            raise ValidationError("Refund reason is required.")
+        user = info.context.user
+        receipt = Receipt.objects.get(pk=int(receipt_id))
 
-        return services.refund_receipt(
-            employee=employee,
-            receipt_id=int(receipt_id),
-            reason=reason,
+        return finalize_receipt(
+            receipt=receipt,
+            performed_by=user,
+        )
+
+
+    # ====================== PAYMENTS ======================
+
+    @strawberry.mutation
+    @permission_required("pos.accept_payment")
+    async def accept_payment(
+        self,
+        info: Info,
+        input: AcceptPaymentInput,
+    ) -> PaymentType:
+
+        user = info.context.user
+
+        return accept_payment(
+            receipt_id=int(input.receipt_id),
+            amount=input.amount,
+            method=input.method,
+            received_by=user,
+        )
+
+
+    # ====================== CREDIT ======================
+
+    @strawberry.mutation
+    @permission_required("pos.create_credit")
+    async def create_credit(
+        self,
+        info: Info,
+        input: CreateCreditInput,
+    ) -> CreditAccountType:
+
+        user = info.context.user
+        receipt = Receipt.objects.get(pk=int(input.receipt_id))
+
+        return create_credit_account(
+            receipt=receipt,
+            customer_name=input.customer_name,
+            customer_phone=input.customer_phone,
+            due_date=input.due_date,
+            approved_by=user,
+        )
+
+
+    # ====================== REFUND ======================
+
+    @strawberry.mutation
+    @permission_required("pos.refund_order")
+    async def refund_receipt(
+        self,
+        info: Info,
+        input: RefundReceiptInput,
+    ) -> ReceiptType:
+
+        user = info.context.user
+
+        return refund_receipt(
+            receipt_id=int(input.receipt_id),
+            reason=input.reason,
+            refunded_by=user,
         )

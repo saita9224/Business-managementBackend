@@ -35,7 +35,7 @@ class POSSessionType:
 
     @strawberry.field
     async def receipts(self, info: Info) -> List["ReceiptType"]:
-        return await info.context["receipts_by_session"].load(self.id)
+        return await info.context["receipts_by_session"].load(int(self.id))
 
 
 # ======================================================
@@ -57,23 +57,23 @@ class ReceiptType:
 
     @strawberry.field
     async def orders(self, info: Info) -> List["OrderType"]:
-        return await info.context["orders_by_receipt"].load(self.id)
+        return await info.context["orders_by_receipt"].load(int(self.id))
 
     @strawberry.field
     async def payments(self, info: Info) -> List["PaymentType"]:
-        return await info.context["payments_by_receipt"].load(self.id)
+        return await info.context["payments_by_receipt"].load(int(self.id))
 
     @strawberry.field
     async def credit(self, info: Info) -> Optional["CreditAccountType"]:
-        return await info.context["credit_by_receipt"].load(self.id)
+        return await info.context["credit_by_receipt"].load(int(self.id))
 
     @strawberry.field
     async def stock_movements(self, info: Info) -> List["POSStockMovementType"]:
-        return await info.context["stock_by_receipt"].load(self.id)
+        return await info.context["stock_by_receipt"].load(int(self.id))
 
     @strawberry.field
     async def balance(self, info: Info) -> Decimal:
-        payments = await info.context["payments_by_receipt"].load(self.id)
+        payments = await info.context["payments_by_receipt"].load(int(self.id))
         paid = sum(p.amount for p in payments)
         return self.total - paid
 
@@ -93,11 +93,11 @@ class OrderType:
 
     @strawberry.field
     async def items(self, info: Info) -> List["OrderItemType"]:
-        return await info.context["items_by_order"].load(self.id)
+        return await info.context["items_by_order"].load(int(self.id))
 
 
 # ======================================================
-# ORDER ITEM (PRICE OVERRIDE LIVES HERE)
+# ORDER ITEM (PRICE SNAPSHOT + OVERRIDE)
 # ======================================================
 
 @strawberry.type
@@ -107,15 +107,22 @@ class OrderItemType:
     product_name: str
 
     quantity: Decimal
-    unit_price: Decimal
-    overridden_price: Optional[Decimal]
-    line_total: Decimal
 
+    listed_price: Decimal
+    final_price: Decimal
+
+    price_overridden: bool
+    price_override_reason: Optional[str]
     price_override_by: Optional[UserType]
+
+    line_total: Decimal
 
     @strawberry.field
     def effective_price(self) -> Decimal:
-        return self.overridden_price or self.unit_price
+        """
+        Always return the final price used for sale.
+        """
+        return self.final_price
 
 
 # ======================================================
@@ -149,7 +156,7 @@ class CreditAccountType:
 
 
 # ======================================================
-# POS → INVENTORY STOCK EVENT (READ-ONLY / AUDIT)
+# POS → INVENTORY STOCK EVENT (AUDIT ONLY)
 # ======================================================
 
 @strawberry.type
