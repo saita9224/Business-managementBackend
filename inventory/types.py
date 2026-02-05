@@ -3,20 +3,34 @@ from datetime import datetime
 
 import strawberry
 from strawberry.types import Info
+from strawberry import Private
+from graphql import GraphQLError
 
-from employees.decorators import permission_required
-from users.types import UserType
+from employees.types import EmployeeType
+
+
+# ============================================================
+# RBAC HELPERS
+# ============================================================
+
+def require_auth(info: Info):
+    employee = info.context.user
+    if not employee or not employee.is_authenticated:
+        raise GraphQLError("Authentication required")
+    return employee
+
+
+def require_permission(employee, perm: str):
+    if not employee.has_permission(perm):
+        raise GraphQLError(f"Permission denied: {perm}")
 
 
 # ============================================================
 # EXPENSE LINK TYPE (AUDIT / ACCOUNTABILITY)
 # ============================================================
+
 @strawberry.type
 class ExpenseLinkType:
-    """
-    Minimal expense representation linked to stock movements
-    for accountability and audit trails.
-    """
     id: strawberry.ID
     item_name: str
     total_price: float
@@ -24,33 +38,48 @@ class ExpenseLinkType:
     balance: float
     funded_by_business: bool
     created_at: datetime
-    performed_by: Optional[UserType]
+    performed_by: Optional[EmployeeType]
 
 
 # ============================================================
-# STOCK MOVEMENT TYPE
+# STOCK MOVEMENT TYPE (IMMUTABLE LEDGER)
 # ============================================================
+
 @strawberry.type
 class StockMovementType:
-    """
-    Immutable record of stock change.
-    """
     id: strawberry.ID
-    movement_type: str
+    movement_type: str  # IN / OUT / ADJUSTMENT
     reason: str
     quantity: float
-    funded_by_business: bool
     group_id: Optional[str]
     notes: Optional[str]
     created_at: datetime
 
     expense_item_id: Optional[strawberry.ID]
+    performed_by: Optional[EmployeeType]
 
-    # -------------------------------
-    # Linked Expense (optional)
-    # -------------------------------
+    # --------------------------------------------------------
+    # PRIVATE INTERNAL FIELD (NOT IN GRAPHQL SCHEMA)
+    # --------------------------------------------------------
+    _funded_by_business: Private[Optional[bool]]
+
+    # --------------------------------------------------------
+    # Business funding (IN only)
+    # --------------------------------------------------------
+    @strawberry.field
+    def funded_by_business(self) -> Optional[bool]:
+        if self.movement_type == "IN":
+            return self._funded_by_business
+        return None
+
+    # --------------------------------------------------------
+    # Linked Expense (STRICT RBAC)
+    # --------------------------------------------------------
     @strawberry.field
     async def expense(self, info: Info) -> Optional[ExpenseLinkType]:
+        employee = require_auth(info)
+        require_permission(employee, "expenses.view_expense")
+
         if not self.expense_item_id:
             return None
 
@@ -64,53 +93,71 @@ class StockMovementType:
             total_price=expense.total_price,
             paid_amount=expense.total_price - expense.balance,
             balance=expense.balance,
-            funded_by_business=self.funded_by_business,
+            funded_by_business=self._funded_by_business or False,
             created_at=expense.created_at,
             performed_by=expense.performed_by,
         )
 
 
 # ============================================================
-# PRODUCT (INVENTORY ITEM)
+# PRODUCT
 # ============================================================
+
 @strawberry.type
 class ProductType:
-    """
-    Inventory Product.
-    Current stock is derived from stock movements.
-    """
     id: strawberry.ID
     name: str
     category: Optional[str]
     unit: str
     created_at: datetime
 
-    _current_stock: float = strawberry.private()
+    # --------------------------------------------------------
+    # PRIVATE FIELD
+    # --------------------------------------------------------
+    _current_stock: Private[float]
 
-    # -------------------------------
-    # Computed stock (safe)
-    # -------------------------------
+    # --------------------------------------------------------
+    # Current stock (RBAC)
+    # --------------------------------------------------------
     @strawberry.field
-    def current_stock(self) -> float:
+    def current_stock(self, info: Info) -> float:
+        employee = require_auth(info)
+        require_permission(employee, "inventory.view_stock")
         return self._current_stock
 
-    # -------------------------------
-    # Stock movements (permission protected)
-    # -------------------------------
+    # --------------------------------------------------------
+    # Movements (STRICT RBAC)
+    # --------------------------------------------------------
     @strawberry.field
-    @permission_required("inventory.stock.view")
     async def movements(self, info: Info) -> List[StockMovementType]:
+        employee = require_auth(info)
+        require_permission(employee, "inventory.view_movements")
+
         return await info.context["movements_by_product_loader"].load(self.id)
 
 
 # ============================================================
-# INVENTORY AUDIT TYPE (MANAGEMENT / READ-ONLY)
+# STOCK RECONCILIATION (COUNT & ADJUSTMENT WORKFLOW)
 # ============================================================
+
+@strawberry.type
+class StockReconciliationType:
+    id: strawberry.ID
+    product: ProductType
+    expected_quantity: float
+    counted_quantity: float
+    difference: float
+    status: str
+    counted_at: datetime
+    counted_by: Optional[EmployeeType]
+    notes: Optional[str]
+
+
+# ============================================================
+# INVENTORY AUDIT VIEW
+# ============================================================
+
 @strawberry.type
 class InventoryAuditType:
-    """
-    High-level audit view combining product, movements, and expenses.
-    Intended for management, accounting, and compliance.
-    """
     product: ProductType
     movements: List[StockMovementType]

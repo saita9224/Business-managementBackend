@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from employees.models import Employee
-from inventory.models import Product
+from inventory.models import Product, StockMovement
 from inventory.services import remove_stock
 
 from .models import (
@@ -19,6 +19,7 @@ from .models import (
     CreditAccount,
     POSStockMovement,
 )
+
 
 # =============================== POS SESSION ===============================
 
@@ -126,7 +127,8 @@ def finalize_receipt(
     Finalizes receipt:
     - Validates receipt has orders
     - Calculates totals
-    - Emits stock movements (best effort)
+    - Emits inventory stock ONLY for directly deductible products
+    - Always records POS stock audit
     """
 
     orders = receipt.orders.prefetch_related("items__product")
@@ -140,28 +142,40 @@ def finalize_receipt(
             line_total = item.final_price * Decimal(item.quantity)
             subtotal += line_total
 
-            if emit_stock and item.product.track_stock:
+            # -------------------------------------------------
+            # INVENTORY DEDUCTION (STRICTLY PER PRODUCT)
+            # -------------------------------------------------
+            inventory_deducted = False
+            inventory_error = None
+
+            if emit_stock and item.product.auto_deduct_on_sale:
                 try:
                     remove_stock(
                         product=item.product,
                         quantity=item.quantity,
-                        reason="POS_SALE",
+                        reason=StockMovement.SALE,
                         performed_by=performed_by,
                         group_id=str(receipt.id),
                     )
-                except ValidationError:
-                    pass
+                    inventory_deducted = True
+                except ValidationError as exc:
+                    inventory_error = str(exc)
 
-                # Always record POS stock movement (audit trail)
-                POSStockMovement.objects.create(
-                    receipt=receipt,
-                    product=item.product,
-                    quantity=item.quantity,
-                    performed_by=performed_by,
-                )
+            # -------------------------------------------------
+            # POS AUDIT (ALWAYS RECORDED)
+            # -------------------------------------------------
+            POSStockMovement.objects.create(
+                receipt=receipt,
+                product=item.product,
+                quantity=item.quantity,
+                deducted_from_inventory=inventory_deducted,
+                notes=inventory_error or "",
+                performed_by=performed_by,
+            )
 
     receipt.subtotal = subtotal
     receipt.total = subtotal - receipt.discount
+    receipt.status = Receipt.OPEN
     receipt.full_clean()
     receipt.save()
 

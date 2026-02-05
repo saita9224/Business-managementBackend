@@ -1,6 +1,7 @@
-# pos/mutation.py
+# POS/mutations.py
 
 from typing import Optional
+from datetime import date
 
 import strawberry
 from strawberry.types import Info
@@ -36,7 +37,7 @@ from .types import (
 
 @strawberry.input
 class OpenSessionInput:
-    opening_cash: float = 0
+    opening_cash: float = 0.0
 
 
 @strawberry.input
@@ -66,7 +67,7 @@ class CreateCreditInput:
     receipt_id: strawberry.ID
     customer_name: str
     customer_phone: Optional[str] = None
-    due_date: strawberry.Date
+    due_date: date   # ✅ FIXED (was strawberry.Date ❌)
 
 
 @strawberry.input

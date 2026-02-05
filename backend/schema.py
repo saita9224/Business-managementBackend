@@ -1,52 +1,94 @@
+# backend/schema.py
+
 import strawberry
 
-# Import app-level GraphQL schema components
+# -------------------------------------------------
+# App-level GraphQL schema components
+# -------------------------------------------------
+
+# Authentication
 from authentication.schema import AuthQuery, AuthMutation
+
+# Employees
 from employees.schema import EmployeeQuery, EmployeeMutation
-from expenses.schema import ExpenseQuery, ExpenseMutation   # ✔ Included properly
 
-# JWT middleware (extension)
+# Expenses
+from expenses.schema import ExpenseQuery, ExpenseMutation
+from expenses.dataloaders import create_expenses_dataloaders
+
+
+# Inventory
+from inventory.schema import InventoryQuery, InventoryMutation
+from inventory.dataloaders import create_inventory_dataloaders
+
+# POS
+from POS.schema import POSQuery, POSMutation
+from POS.dataloaders import create_pos_dataloaders
+
+# -------------------------------------------------
+# Middleware
+# -------------------------------------------------
 from .middleware import JWTMiddleware
-
-# Dataloaders (for context)
-from expenses.dataloaders import create_dataloaders
 
 
 # -------------------------------------------------
-# Context Function (replaces the missing backend.context)
+# Context Function (single source of truth)
 # -------------------------------------------------
 def get_context(request):
     """
-    This function attaches request + dataloaders to GraphQL context.
-    It prevents N+1 queries by enabling batched database fetching.
+    Attaches request + all dataloaders to GraphQL context.
+
+    This is the ONLY place context is built.
+    Prevents N+1 queries via request-scoped dataloaders.
     """
+
     return {
         "request": request,
-        **create_dataloaders(),
+        "user": request.user,  # unified access (POS, Inventory, Expenses)
+        # ------------------
+        # Dataloaders
+        # ------------------
+        **create_expense_dataloaders(),
+        **create_inventory_dataloaders(),
+        **create_pos_dataloaders(),
     }
 
 
 # -------------------------------------------------
-# Root Query (combine all queries)
+# Root Query (composition only)
 # -------------------------------------------------
 @strawberry.type
 class Query(
     AuthQuery,
     EmployeeQuery,
-    ExpenseQuery,       # ✔ Expenses added
+    ExpenseQuery,
+    InventoryQuery,
+    POSQuery,
 ):
+    """
+    Root GraphQL Query.
+
+    Composed from app-level query mixins.
+    """
     pass
 
 
 # -------------------------------------------------
-# Root Mutation (combine all mutations)
+# Root Mutation (composition only)
 # -------------------------------------------------
 @strawberry.type
 class Mutation(
     AuthMutation,
     EmployeeMutation,
-    ExpenseMutation,   # ✔ Expenses added
+    ExpenseMutation,
+    InventoryMutation,
+    POSMutation,
 ):
+    """
+    Root GraphQL Mutation.
+
+    Composed from app-level mutation mixins.
+    """
     pass
 
 

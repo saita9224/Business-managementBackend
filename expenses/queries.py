@@ -18,10 +18,9 @@ from .models import Supplier
 @strawberry.type
 class ExpenseQuery:
 
-    # --------------------------------------------------------
-    # EXPENSE SEARCH FILTERS
-    # --------------------------------------------------------
-
+    # -------------------------------
+    # SEARCH
+    # -------------------------------
     @strawberry.field
     @permission_required("expenses.view")
     def expenses_by_supplier(self, info, supplier_id: int) -> List[ExpenseItemType]:
@@ -37,19 +36,17 @@ class ExpenseQuery:
     def expenses_by_product(self, info, product_id: int) -> List[ExpenseItemType]:
         return list_expenses_by_product(product_id)
 
-    # --------------------------------------------------------
+    # -------------------------------
     # SUPPLIERS
-    # --------------------------------------------------------
-
+    # -------------------------------
     @strawberry.field
     @permission_required("expenses.view")
     def suppliers(self, info) -> List[SupplierType]:
         return list(Supplier.objects.all())
 
-    # --------------------------------------------------------
-    # EXPENSE DETAILS
-    # --------------------------------------------------------
-
+    # -------------------------------
+    # DETAILS
+    # -------------------------------
     @strawberry.field
     @permission_required("expenses.view")
     def expense_details(self, info, expense_id: int) -> ExpenseDetailsType:

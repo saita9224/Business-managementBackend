@@ -2,6 +2,7 @@ from typing import List, Optional
 
 import strawberry
 from strawberry.types import Info
+from graphql import GraphQLError
 from asgiref.sync import sync_to_async
 
 from employees.decorators import permission_required
@@ -11,6 +12,7 @@ from .types import (
     ProductType,
     StockMovementType,
     InventoryAuditType,
+    StockReconciliationType,
 )
 
 
@@ -35,13 +37,10 @@ class InventoryQuery:
 
         def fetch():
             qs = Product.objects.all().order_by("name")
-
             if search:
                 qs = qs.filter(name__icontains=search)
-
             if category:
                 qs = qs.filter(category=category)
-
             return list(qs)
 
         return await sync_to_async(fetch)()
@@ -61,11 +60,11 @@ class InventoryQuery:
         try:
             return await sync_to_async(Product.objects.get)(pk=id)
         except Product.DoesNotExist:
-            raise ValueError("Product not found")
+            raise GraphQLError("Product not found")
 
 
     # --------------------------------------------------------
-    # GLOBAL STOCK MOVEMENTS (AUDIT VIEW)
+    # GLOBAL STOCK MOVEMENTS (AUDIT)
     # --------------------------------------------------------
     @strawberry.field
     @permission_required("inventory.stock.view")
@@ -81,17 +80,15 @@ class InventoryQuery:
                 .select_related("product", "expense_item", "performed_by")
                 .order_by("-created_at")
             )
-
             if product_id:
                 qs = qs.filter(product_id=product_id)
-
             return list(qs)
 
         return await sync_to_async(fetch)()
 
 
     # --------------------------------------------------------
-    # INVENTORY AUDIT (MANAGEMENT)
+    # INVENTORY AUDIT
     # --------------------------------------------------------
     @strawberry.field
     @permission_required("inventory.stock.view_history")
@@ -104,7 +101,7 @@ class InventoryQuery:
         try:
             product = await sync_to_async(Product.objects.get)(pk=product_id)
         except Product.DoesNotExist:
-            raise ValueError("Product not found")
+            raise GraphQLError("Product not found")
 
         movements = await info.context[
             "movements_by_product_loader"
@@ -117,14 +114,14 @@ class InventoryQuery:
 
 
     # --------------------------------------------------------
-    # PENDING STOCK RECONCILIATIONS (PHYSICAL COUNTS)
+    # PENDING STOCK RECONCILIATIONS
     # --------------------------------------------------------
     @strawberry.field
     @permission_required("inventory.stock.adjust")
     async def pending_reconciliations(
         self,
         info: Info,
-    ) -> List[StockReconciliation]:
+    ) -> List[StockReconciliationType]:
 
         def fetch():
             return list(
@@ -134,4 +131,20 @@ class InventoryQuery:
                 .order_by("-counted_at")
             )
 
-        return await sync_to_async(fetch)()
+        reconciliations = await sync_to_async(fetch)()
+
+        # 🔥 CLEAN WRAPPING (MODEL → GRAPHQL TYPE)
+        return [
+            StockReconciliationType(
+                id=r.id,
+                product=r.product,
+                expected_quantity=r.expected_quantity,
+                counted_quantity=r.counted_quantity,
+                difference=r.counted_quantity - r.expected_quantity,
+                status=r.status,
+                counted_at=r.counted_at,
+                counted_by=r.counted_by,
+                notes=r.notes,
+            )
+            for r in reconciliations
+        ]

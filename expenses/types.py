@@ -4,10 +4,10 @@ import strawberry
 from datetime import date
 from typing import Optional, List
 
-# Django models (only used for field access)
-from .models import ExpenseItem
-from inventory.models import Product
 from graphql import GraphQLError
+
+# ✅ SINGLE SOURCE OF TRUTH
+from inventory.types import ProductType
 
 
 # ------------------------------------------------------------
@@ -34,26 +34,13 @@ class ExpensePaymentType:
 
 
 # ------------------------------------------------------------
-# PRODUCT TYPE (for resolver return)
-# ------------------------------------------------------------
-@strawberry.type
-class ProductType:
-    id: strawberry.ID
-    name: str
-    buying_price: float
-    selling_price: float
-    stock: float
-    created_at: date
-
-
-# ------------------------------------------------------------
 # EXPENSE ITEM TYPE (DATALOADER ENABLED)
 # ------------------------------------------------------------
 @strawberry.type
 class ExpenseItemType:
     id: strawberry.ID
 
-    # required for resolvers to access them
+    # internal linkage
     supplier_id: Optional[int]
     product_id: Optional[int]
 
@@ -67,7 +54,7 @@ class ExpenseItemType:
     created_at: date
 
     # -------------------------------
-    # Supplier via dataloader
+    # Supplier
     # -------------------------------
     @strawberry.field
     async def supplier(self, info) -> Optional[SupplierType]:
@@ -76,7 +63,7 @@ class ExpenseItemType:
         return await info.context["supplier_loader"].load(self.supplier_id)
 
     # -------------------------------
-    # Product via dataloader
+    # Product (from INVENTORY)
     # -------------------------------
     @strawberry.field
     async def product(self, info) -> Optional[ProductType]:
@@ -85,14 +72,14 @@ class ExpenseItemType:
         return await info.context["product_loader"].load(self.product_id)
 
     # -------------------------------
-    # Payments list via dataloader
+    # Payments (RBAC)
     # -------------------------------
     @strawberry.field
     async def payments(self, info) -> List[ExpensePaymentType]:
         user = info.context.user
 
-        if not user.is_authenticated:
-            raise GraphQLError("Authentication required.")
+        if not user or not user.is_authenticated:
+            raise GraphQLError("Authentication required")
 
         if not user.has_permission("expenses.view_payments"):
             raise GraphQLError("Permission denied: expenses.view_payments")

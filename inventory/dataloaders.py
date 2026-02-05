@@ -1,14 +1,25 @@
+from collections import defaultdict
+from typing import List, Dict, Optional
+
 from asgiref.sync import sync_to_async
-from django.db.models import Sum, Max
+from django.db.models import (
+    Sum,
+    Q,
+    OuterRef,
+    Subquery,
+    F,
+)
 from strawberry.dataloader import DataLoader
 
 from .models import Product, StockMovement, StockReconciliation
 
 
 # ────────────────────────────────────────────────
-# Load stock movements by product
+# Load stock movements by product (audit trail)
 # ────────────────────────────────────────────────
-async def load_movements_by_product(keys: list[int]):
+async def load_movements_by_product(
+    keys: List[int],
+) -> List[List[StockMovement]]:
     movements = await sync_to_async(list)(
         StockMovement.objects
         .filter(product_id__in=keys)
@@ -16,74 +27,96 @@ async def load_movements_by_product(keys: list[int]):
         .order_by("created_at")
     )
 
-    grouped = {}
-    for m in movements:
-        grouped.setdefault(m.product_id, []).append(m)
+    grouped: Dict[int, List[StockMovement]] = defaultdict(list)
+    for movement in movements:
+        grouped[movement.product_id].append(movement)
 
-    return [grouped.get(k, []) for k in keys]
+    # DataLoader requires output order to match input keys
+    return [grouped.get(product_id, []) for product_id in keys]
 
 
 # ────────────────────────────────────────────────
-# Load current stock per product (derived)
+# Load current stock per product (derived, safe)
 # ────────────────────────────────────────────────
-async def load_current_stock(keys: list[int]):
+async def load_current_stock(
+    keys: List[int],
+) -> List[int]:
+    """
+    Stock is derived from movements:
+    - IN  → increase
+    - OUT → decrease
+    """
+
     rows = await sync_to_async(list)(
         StockMovement.objects
         .filter(product_id__in=keys)
-        .values("product_id", "movement_type")
-        .annotate(total=Sum("quantity"))
-    )
-
-    stock_map = {}
-
-    for row in rows:
-        pid = row["product_id"]
-        stock_map.setdefault(pid, 0)
-
-        if row["movement_type"] == StockMovement.IN:
-            stock_map[pid] += row["total"]
-        else:
-            stock_map[pid] -= row["total"]
-
-    return [stock_map.get(k, 0) for k in keys]
-
-
-# ────────────────────────────────────────────────
-# Load latest reconciliation per product
-# ────────────────────────────────────────────────
-async def load_latest_reconciliation(keys: list[int]):
-    latest = await sync_to_async(list)(
-        StockReconciliation.objects
-        .filter(product_id__in=keys)
         .values("product_id")
-        .annotate(latest=Max("counted_at"))
+        .annotate(
+            total_in=Sum(
+                "quantity",
+                filter=Q(movement_type=StockMovement.IN),
+            ),
+            total_out=Sum(
+                "quantity",
+                filter=Q(movement_type=StockMovement.OUT),
+            ),
+        )
     )
 
-    latest_map = {
-        row["product_id"]: row["latest"]
-        for row in latest
-    }
+    stock_map: Dict[int, int] = {}
+    for row in rows:
+        stock_map[row["product_id"]] = (
+            (row["total_in"] or 0) - (row["total_out"] or 0)
+        )
+
+    return [stock_map.get(product_id, 0) for product_id in keys]
+
+
+# ────────────────────────────────────────────────
+# Load latest reconciliation per product (safe)
+# ────────────────────────────────────────────────
+async def load_latest_reconciliation(
+    keys: List[int],
+) -> List[Optional[StockReconciliation]]:
+    """
+    Uses a Subquery to guarantee exactly ONE
+    latest reconciliation per product.
+    """
+
+    latest_reconciliation_subquery = (
+        StockReconciliation.objects
+        .filter(product_id=OuterRef("product_id"))
+        .order_by("-counted_at")
+        .values("id")[:1]
+    )
 
     reconciliations = await sync_to_async(list)(
         StockReconciliation.objects
-        .filter(
-            product_id__in=latest_map.keys(),
-            counted_at__in=latest_map.values()
+        .filter(product_id__in=keys)
+        .annotate(
+            latest_id=Subquery(latest_reconciliation_subquery)
         )
+        .filter(id=F("latest_id"))
         .select_related("counted_by", "approved_by")
     )
 
-    recon_map = {
-        r.product_id: r for r in reconciliations
+    recon_map: Dict[int, StockReconciliation] = {
+        recon.product_id: recon
+        for recon in reconciliations
     }
 
-    return [recon_map.get(k) for k in keys]
+    return [recon_map.get(product_id) for product_id in keys]
 
 
 # ────────────────────────────────────────────────
-# Loader factory (request scoped)
+# Loader factory (request-scoped)
 # ────────────────────────────────────────────────
 def create_inventory_dataloaders():
+    """
+    Must be created per request to ensure:
+    - Correct caching
+    - No data leakage across users
+    """
     return {
         "movements_by_product_loader": DataLoader(
             load_fn=load_movements_by_product

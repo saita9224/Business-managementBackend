@@ -1,13 +1,14 @@
 # pos/types.py
 
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 from datetime import datetime, date
 from decimal import Decimal
 
 import strawberry
 from strawberry.types import Info
 
-from employees.types import UserType
+from employees.types import EmployeeType 
+
 from .models import (
     POSSession,
     Receipt,
@@ -31,7 +32,7 @@ class POSSessionType:
     closing_cash: Optional[Decimal]
     is_active: bool
 
-    employee: UserType
+    employee: "EmployeeType"
 
     @strawberry.field
     async def receipts(self, info: Info) -> List["ReceiptType"]:
@@ -53,7 +54,7 @@ class ReceiptType:
     created_at: datetime
 
     session: POSSessionType
-    created_by: UserType
+    created_by: "EmployeeType"
 
     @strawberry.field
     async def orders(self, info: Info) -> List["OrderType"]:
@@ -89,7 +90,7 @@ class OrderType:
     is_refunded: bool
     created_at: datetime
 
-    created_by: UserType
+    created_by: "EmployeeType"
 
     @strawberry.field
     async def items(self, info: Info) -> List["OrderItemType"]:
@@ -113,15 +114,12 @@ class OrderItemType:
 
     price_overridden: bool
     price_override_reason: Optional[str]
-    price_override_by: Optional[UserType]
+    price_override_by: Optional["EmployeeType"]
 
     line_total: Decimal
 
     @strawberry.field
     def effective_price(self) -> Decimal:
-        """
-        Always return the final price used for sale.
-        """
         return self.final_price
 
 
@@ -136,7 +134,7 @@ class PaymentType:
     amount: Decimal
     created_at: datetime
 
-    received_by: UserType
+    received_by: "EmployeeType"
 
 
 # ======================================================
@@ -152,7 +150,7 @@ class CreditAccountType:
     due_date: date
     is_settled: bool
 
-    approved_by: UserType
+    approved_by: "EmployeeType"
 
 
 # ======================================================

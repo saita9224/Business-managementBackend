@@ -49,8 +49,8 @@ class JWTMiddleware(SchemaExtension):
                     prefix, token = parts
                     if prefix.lower() == "bearer":
                         user = decode_jwt_token(token)
-                        if user:
-                            set_attr(context, "user", user)
+                        if not user:
+                            logger.debug("Invalid or expired JWT token")
 
         # -----------------------------
         # GRAPHQL DATALOADERS (PER REQUEST)

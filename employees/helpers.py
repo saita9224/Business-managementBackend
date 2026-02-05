@@ -21,6 +21,9 @@ def require_permission(info, permission_name: str, target_employee_id=None):
 
     if not user:
         raise GraphQLError("Authentication required")
+    
+    if not user.is_active:
+        raise GraphQLError("User account is inactive")
 
     # --------------------------
     # 1. ADMIN BYPASS
@@ -50,7 +53,6 @@ def require_permission(info, permission_name: str, target_employee_id=None):
     if not allowed:
         raise GraphQLError(f"Permission denied: {permission_name}")
     
-    if not user.is_active:
-        raise GraphQLError("User account is inactive")
+    
 
     return True

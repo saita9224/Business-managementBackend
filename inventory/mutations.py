@@ -2,13 +2,15 @@ from typing import Optional
 
 import strawberry
 from strawberry.types import Info
+from graphql import GraphQLError
+from asgiref.sync import sync_to_async
 
 from employees.decorators import permission_required
 
+from .models import Product
 from .services import (
-    create_product,
-    add_stock,
-    remove_stock,
+    add_stock as add_stock_service,
+    remove_stock as remove_stock_service,
 )
 from .types import ProductType, StockMovementType
 
@@ -31,8 +33,6 @@ class AddStockInput:
     reason: str
     funded_by_business: bool
     notes: Optional[str] = None
-
-    # Optional expense linkage
     expense_item_id: Optional[strawberry.ID] = None
     group_id: Optional[str] = None
 
@@ -63,20 +63,20 @@ class InventoryMutation:
         input: CreateProductInput,
     ) -> ProductType:
 
-        user = info.context.user
+        employee = info.context.user
 
-        product = await create_product(
-            name=input.name,
-            unit=input.unit,
-            category=input.category,
-            performed_by=user,
-        )
+        def create():
+            return Product.objects.create(
+                name=input.name,
+                unit=input.unit,
+                category=input.category,
+            )
 
-        return product
+        return await sync_to_async(create)()
 
 
     # --------------------------------------------------------
-    # ADD STOCK (INBOUND)
+    # ADD STOCK (IN)
     # --------------------------------------------------------
     @strawberry.mutation
     @permission_required("inventory.stock.in")
@@ -86,24 +86,29 @@ class InventoryMutation:
         input: AddStockInput,
     ) -> StockMovementType:
 
-        user = info.context.user
+        employee = info.context.user
 
-        movement = await add_stock(
-            product_id=input.product_id,
+        try:
+            product = await sync_to_async(Product.objects.get)(
+                pk=input.product_id
+            )
+        except Product.DoesNotExist:
+            raise GraphQLError("Product not found")
+
+        return await sync_to_async(add_stock_service)(
+            product=product,
             quantity=input.quantity,
             reason=input.reason,
             funded_by_business=input.funded_by_business,
-            notes=input.notes,
-            expense_item_id=input.expense_item_id,
+            expense_item=input.expense_item_id,
             group_id=input.group_id,
-            performed_by=user,
+            notes=input.notes,
+            performed_by=employee,
         )
-
-        return movement
 
 
     # --------------------------------------------------------
-    # REMOVE STOCK (OUTBOUND)
+    # REMOVE STOCK (OUT)
     # --------------------------------------------------------
     @strawberry.mutation
     @permission_required("inventory.stock.out")
@@ -113,14 +118,19 @@ class InventoryMutation:
         input: RemoveStockInput,
     ) -> StockMovementType:
 
-        user = info.context.user
+        employee = info.context.user
 
-        movement = await remove_stock(
-            product_id=input.product_id,
+        try:
+            product = await sync_to_async(Product.objects.get)(
+                pk=input.product_id
+            )
+        except Product.DoesNotExist:
+            raise GraphQLError("Product not found")
+
+        return await sync_to_async(remove_stock_service)(
+            product=product,
             quantity=input.quantity,
             reason=input.reason,
             notes=input.notes,
-            performed_by=user,
+            performed_by=employee,
         )
-
-        return movement

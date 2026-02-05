@@ -27,10 +27,9 @@ logger = logging.getLogger(__name__)
 @strawberry.type
 class ExpenseMutation:
 
-    # ────────────────────────────────────────────────
-    # SUPPLIER MANAGEMENT
-    # ────────────────────────────────────────────────
-
+    # -------------------------------
+    # SUPPLIERS
+    # -------------------------------
     @strawberry.mutation
     @permission_required("expenses.manage_suppliers")
     def create_supplier(self, info, name: str) -> SupplierType:
@@ -38,7 +37,7 @@ class ExpenseMutation:
             return create_supplier(name)
         except ValidationError as e:
             raise GraphQLError(e.message)
-        except Exception as e:
+        except Exception:
             logger.exception("Error creating supplier")
             raise GraphQLError("Internal server error")
 
@@ -49,7 +48,7 @@ class ExpenseMutation:
             return update_supplier(supplier_id, name)
         except ValidationError as e:
             raise GraphQLError(e.message)
-        except Exception as e:
+        except Exception:
             logger.exception("Error updating supplier")
             raise GraphQLError("Internal server error")
 
@@ -60,14 +59,13 @@ class ExpenseMutation:
             return delete_supplier(supplier_id)
         except ValidationError as e:
             raise GraphQLError(e.message)
-        except Exception as e:
+        except Exception:
             logger.exception("Error deleting supplier")
             raise GraphQLError("Internal server error")
 
-    # ────────────────────────────────────────────────
-    # EXPENSE CREATION
-    # ────────────────────────────────────────────────
-
+    # -------------------------------
+    # EXPENSE
+    # -------------------------------
     @strawberry.mutation
     @permission_required("expenses.create")
     def create_expense(self, info, data: ExpenseInput) -> ExpenseItemType:
@@ -76,21 +74,20 @@ class ExpenseMutation:
                 supplier_id=data.supplier_id,
                 product_id=data.product_id,
                 item_name=data.item_name,
-                unit_price=data.price,
+                unit_price=data.unit_price,  # ✅ FIXED
                 quantity=data.quantity,
             )
         except ValidationError as e:
             raise GraphQLError(e.message)
-        except Exception as e:
+        except Exception:
             logger.exception("Error creating expense")
             raise GraphQLError("Internal server error")
 
-    # ────────────────────────────────────────────────
-    # PAYMENT (Record Installment)
-    # ────────────────────────────────────────────────
-
+    # -------------------------------
+    # PAY BALANCE
+    # -------------------------------
     @strawberry.mutation
-    @permission_required("expenses.pay")  # ← FIXED
+    @permission_required("expenses.pay")
     def pay_balance(self, info, data: PayBalanceInput) -> ExpenseItemType:
         try:
             result = record_payment(
@@ -100,6 +97,6 @@ class ExpenseMutation:
             return result["expense"]
         except ValidationError as e:
             raise GraphQLError(e.message)
-        except Exception as e:
+        except Exception:
             logger.exception("Error processing payment")
             raise GraphQLError("Internal server error")

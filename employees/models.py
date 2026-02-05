@@ -1,37 +1,68 @@
 # employees/models.py
+
 from django.db import models
-from django.contrib.auth.hashers import make_password, check_password
+from django.contrib.auth.models import (
+    AbstractBaseUser,
+    PermissionsMixin,
+    BaseUserManager,
+)
 
 
 # ======================================================
-# EMPLOYEE MODEL
+# EMPLOYEE MANAGER
 # ======================================================
-class Employee(models.Model):
+class EmployeeManager(BaseUserManager):
+    def create_user(self, email, password=None, **extra_fields):
+        if not email:
+            raise ValueError("Email is required")
+
+        email = self.normalize_email(email)
+        employee = self.model(email=email, **extra_fields)
+        employee.set_password(password)
+        employee.save(using=self._db)
+        return employee
+
+    def create_superuser(self, email, password=None, **extra_fields):
+        extra_fields.setdefault("is_staff", True)
+        extra_fields.setdefault("is_superuser", True)
+        extra_fields.setdefault("is_active", True)
+
+        if not extra_fields.get("is_staff"):
+            raise ValueError("Superuser must have is_staff=True")
+
+        if not extra_fields.get("is_superuser"):
+            raise ValueError("Superuser must have is_superuser=True")
+
+        return self.create_user(email, password, **extra_fields)
+
+
+# ======================================================
+# EMPLOYEE MODEL (AUTH USER)
+# ======================================================
+class Employee(AbstractBaseUser, PermissionsMixin):
     name = models.CharField(max_length=100)
-    email = models.EmailField(unique=True , db_index=True)
+    email = models.EmailField(unique=True, db_index=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
 
     roles = models.ManyToManyField(
         "Role",
         through="EmployeeRole",
-        related_name="employees"
+        related_name="employees",
+        blank=True,
     )
 
     is_active = models.BooleanField(default=True)
+    is_staff = models.BooleanField(default=False)  # REQUIRED for Django admin
 
-    password = models.CharField(max_length=256)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # Password helpers
-    def set_password(self, raw_password):
-        self.password = make_password(raw_password)
-        
+    objects = EmployeeManager()
 
-    def check_password(self, raw_password):
-        return check_password(raw_password, self.password)
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = ["name"]
 
     def __str__(self):
-        return f"{self.name}"
+        return self.name
 
 
 # ======================================================
@@ -45,7 +76,7 @@ class Role(models.Model):
     permissions = models.ManyToManyField(
         "Permission",
         through="RolePermission",
-        related_name="roles"
+        related_name="roles",
     )
 
     def __str__(self):
@@ -75,7 +106,7 @@ class RolePermission(models.Model):
         unique_together = ("role", "permission")
 
     def __str__(self):
-        return f"{self.role.name} → {self.permission.name}"
+        return f"{self.role.name} → {self.permission.code}"
 
 
 # ======================================================
@@ -87,8 +118,9 @@ class EmployeeRole(models.Model):
 
     class Meta:
         indexes = [
-        models.Index(fields=["employee", "role"]),
+            models.Index(fields=["employee", "role"]),
         ]
+        unique_together = ("employee", "role")
 
     def __str__(self):
-        return f"{self.employee.name} → {self.role.name}"
+        return f"{self.employee.email} → {self.role.name}"

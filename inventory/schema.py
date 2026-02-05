@@ -1,16 +1,5 @@
-import strawberry
 from .queries import InventoryQuery
 from .mutations import InventoryMutation
+from .dataloaders import create_inventory_dataloaders
 
-@strawberry.type
-class Query(InventoryQuery):
-    pass
-
-@strawberry.type
-class Mutation(InventoryMutation):
-    pass
-
-inventory_schema = strawberry.Schema(
-    query=Query,
-    mutation=Mutation,
-)
+__all__ = ["InventoryQuery", "InventoryMutation", "create_inventory_dataloaders"]
