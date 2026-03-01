@@ -6,6 +6,7 @@ from typing import Optional
 
 from django.conf import settings
 from django.utils import timezone
+from asgiref.sync import sync_to_async
 
 from employees.models import Employee
 
@@ -41,7 +42,7 @@ def create_jwt_token(employee: Employee, expires_in: int = ACCESS_TOKEN_EXPIRES)
 # ======================================================
 # DECODE JWT TOKEN
 # ======================================================
-def decode_jwt_token(token: str) -> Optional[Employee]:
+async def decode_jwt_token(token: str) -> Optional[Employee]:
     from jwt import ExpiredSignatureError, InvalidTokenError, DecodeError
 
     try:
@@ -51,7 +52,7 @@ def decode_jwt_token(token: str) -> Optional[Employee]:
         if not user_id:
             return None
 
-        employee = Employee.objects.get(id=user_id)
+        employee = await sync_to_async(Employee.objects.get)(id=user_id)
 
         if not employee.is_active:
             return None

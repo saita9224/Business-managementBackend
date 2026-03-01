@@ -12,7 +12,7 @@ from .services import (
     list_expenses_by_product,
     get_expense_details,
 )
-from .models import Supplier
+from .models import Supplier, ExpenseItem
 
 
 @strawberry.type
@@ -56,3 +56,12 @@ class ExpenseQuery:
             payments=result["payments"],
             remaining_balance=result["remaining_balance"],
         )
+    # -------------------------------
+    # ALL EXPENSES (DASHBOARD LIST)
+    # -------------------------------
+    @strawberry.field
+    @permission_required("expenses.view")
+    def all_expenses(self, info) -> List[ExpenseItemType]:
+        return ExpenseItem.objects.select_related(
+            "supplier", "product"
+            ).order_by("-created_at")

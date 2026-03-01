@@ -1,13 +1,15 @@
 from django.core.management.base import BaseCommand
+from django.db import transaction
 from employees.models import Employee, Role, Permission, RolePermission
 
 
 class Command(BaseCommand):
     help = "Seeds the database with initial roles, permissions, and admin user."
 
+    @transaction.atomic
     def handle(self, *args, **kwargs):
 
-        # 1. Create ADMIN role
+        # 1️⃣ Create ADMIN role
         admin_role, created = Role.objects.get_or_create(
             name="Admin",
             defaults={"description": "System Administrator"}
@@ -18,26 +20,34 @@ class Command(BaseCommand):
         else:
             self.stdout.write("Admin role already exists")
 
-        # 2. Assign ALL permissions to Admin
+        # 2️⃣ Assign ALL permissions to Admin (without duplicates)
         permissions = Permission.objects.all()
 
         for perm in permissions:
-            RolePermission.objects.get_or_create(role=admin_role, permission=perm)
+            RolePermission.objects.get_or_create(
+                role=admin_role,
+                permission=perm
+            )
 
         self.stdout.write(self.style.SUCCESS("✔ All permissions assigned to Admin"))
 
-        # 3. Create default admin user
+        # 3️⃣ Create default admin user
         admin_email = "admin@example.com"
 
-        if not Employee.objects.filter(email=admin_email).exists():
-            admin = Employee.objects.create(
-                name="System Administrator",
-                email=admin_email,
-                phone="",
-                is_active=True,
-                password=""  # will be replaced below
-            )
+        admin, created = Employee.objects.get_or_create(
+            email=admin_email,
+            defaults={
+                "name": "System Administrator",
+                "phone": "",
+                "is_active": True,
+            }
+        )
+
+        if created:
+            # Proper way to set password
             admin.set_password("Admin123!")
+            admin.save()
+
             admin.roles.add(admin_role)
 
             self.stdout.write(self.style.SUCCESS(
