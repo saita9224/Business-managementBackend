@@ -2,6 +2,7 @@
 
 import strawberry
 from graphql import GraphQLError
+from asgiref.sync import sync_to_async
 
 from employees.models import Employee
 from .services import create_jwt_token
@@ -20,10 +21,14 @@ class LoginPayload:
 class AuthMutation:
 
     @strawberry.mutation
-    def login(self, email: str, password: str) -> LoginPayload:
+    async def login(self, email: str, password: str) -> LoginPayload:
 
         try:
-            employee = (Employee.objects.prefetch_related("roles__permissions").get(email__iexact=email))
+           employee = await sync_to_async(
+              lambda: Employee.objects
+              .prefetch_related("roles__permissions")
+              .get(email__iexact=email)
+              )()
         except Employee.DoesNotExist:
            raise GraphQLError("Invalid email or password")
 

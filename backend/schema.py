@@ -48,7 +48,7 @@ def get_context(request):
         # ------------------
         # Dataloaders
         # ------------------
-        **create_expense_dataloaders(),
+        **create_expenses_dataloaders(),
         **create_inventory_dataloaders(),
         **create_pos_dataloaders(),
     }

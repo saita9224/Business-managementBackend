@@ -4,7 +4,6 @@ import strawberry
 from datetime import datetime
 from typing import Optional, List
 from decimal import Decimal
-from graphql import GraphQLError
 
 from inventory.types import ProductType
 
@@ -51,45 +50,96 @@ class ExpenseItemType:
     quantity: Decimal
     total_price: Decimal
 
-    amount_paid: Decimal
-    balance: Decimal
-    is_fully_paid: bool
-
     payment_group_id: str
     created_at: datetime
 
     # --------------------------------------------------------
     # Supplier
     # --------------------------------------------------------
+
     @strawberry.field
     async def supplier(self, info) -> Optional[SupplierType]:
+        """
+        Resolve supplier using DataLoader
+        """
         if not self.supplier_id:
             return None
-        return await info.context["supplier_loader"].load(self.supplier_id)
+
+        loader = info.context["supplier_loader"]
+        return await loader.load(self.supplier_id)
 
     # --------------------------------------------------------
     # Product
     # --------------------------------------------------------
+
     @strawberry.field
     async def product(self, info) -> Optional[ProductType]:
+        """
+        Resolve product using DataLoader
+        """
         if not self.product_id:
             return None
-        return await info.context["product_loader"].load(self.product_id)
+
+        loader = info.context["product_loader"]
+        return await loader.load(self.product_id)
 
     # --------------------------------------------------------
-    # Payments (RBAC Protected)
+    # Payments
     # --------------------------------------------------------
+
     @strawberry.field
     async def payments(self, info) -> List[ExpensePaymentType]:
-        user = info.context.user
+        """
+        Resolve payments using DataLoader
+        """
+        loader = info.context["payments_by_expense_loader"]
+        return await loader.load(self.id)
 
-        if not user or not user.is_authenticated:
-            raise GraphQLError("Authentication required")
+    # --------------------------------------------------------
+    # Amount Paid
+    # --------------------------------------------------------
 
-        if not user.has_permission("expenses.view_payments"):
-            raise GraphQLError("Permission denied: expenses.view_payments")
+    @strawberry.field
+    async def amount_paid(self, info) -> Decimal:
+        """
+        Calculate total amount paid for this expense
+        """
+        loader = info.context["payments_by_expense_loader"]
+        payments = await loader.load(self.id)
 
-        return await info.context["payments_by_expense_loader"].load(self.id)
+        return sum((p.amount for p in payments), Decimal("0"))
+
+    # --------------------------------------------------------
+    # Balance
+    # --------------------------------------------------------
+
+    @strawberry.field
+    async def balance(self, info) -> Decimal:
+        """
+        Remaining unpaid balance
+        """
+        loader = info.context["payments_by_expense_loader"]
+        payments = await loader.load(self.id)
+
+        amount_paid = sum((p.amount for p in payments), Decimal("0"))
+
+        return self.total_price - amount_paid
+
+    # --------------------------------------------------------
+    # Is Fully Paid
+    # --------------------------------------------------------
+
+    @strawberry.field
+    async def is_fully_paid(self, info) -> bool:
+        """
+        Whether expense is fully paid
+        """
+        loader = info.context["payments_by_expense_loader"]
+        payments = await loader.load(self.id)
+
+        amount_paid = sum((p.amount for p in payments), Decimal("0"))
+
+        return amount_paid >= self.total_price
 
 
 # ============================================================
@@ -104,15 +154,24 @@ class ExpenseDetailsType:
 
 
 # ============================================================
-# INPUT TYPES (HYBRID ALIGNED)
+# INPUT TYPES
 # ============================================================
 
 @strawberry.input
 class ExpenseInput:
-    supplier_id: Optional[int]        # ✅ supported
-    supplier_name: Optional[str]      # ✅ supported
+    """
+    Hybrid supplier input.
+
+    Supports either:
+    - existing supplier via supplier_id
+    - new supplier via supplier_name
+    """
+
+    supplier_id: Optional[int]
+    supplier_name: Optional[str]
 
     product_id: Optional[int]
+
     item_name: str
     quantity: Decimal
     unit_price: Decimal

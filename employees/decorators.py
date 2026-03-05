@@ -1,14 +1,12 @@
 # employees/decorators.py
+
 import inspect
 from functools import wraps
+from asgiref.sync import sync_to_async
 from .helpers import require_permission
 
 
 def permission_required(permission_name: str):
-    """
-    Decorator that enforces RBAC permissions.
-    Now supports passing employee ID for self-update access.
-    """
     def decorator(func):
 
         if inspect.iscoroutinefunction(func):
@@ -16,10 +14,15 @@ def permission_required(permission_name: str):
             @wraps(func)
             async def wrapper(root, info, *args, **kwargs):
 
-                # Extract employee ID for updateEmployee(id: ...)
                 target_employee_id = kwargs.get("id") or kwargs.get("employee_id")
 
-                require_permission(info, permission_name, target_employee_id)
+                # run sync permission check safely
+                await sync_to_async(require_permission)(
+                    info,
+                    permission_name,
+                    target_employee_id,
+                )
+
                 return await func(root, info, *args, **kwargs)
 
             return wrapper
@@ -29,8 +32,7 @@ def permission_required(permission_name: str):
             @wraps(func)
             def wrapper(root, info, *args, **kwargs):
 
-                # Extract employee ID for updateEmployee(id: ...)
-                target_employee_id = kwargs.get("id")
+                target_employee_id = kwargs.get("id") or kwargs.get("employee_id")
 
                 require_permission(info, permission_name, target_employee_id)
                 return func(root, info, *args, **kwargs)
