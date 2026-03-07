@@ -65,7 +65,7 @@ class ExpenseItemType:
         if not self.supplier_id:
             return None
 
-        loader = info.context["supplier_loader"]
+        loader = info.context.supplier_loader
         return await loader.load(self.supplier_id)
 
     # --------------------------------------------------------
@@ -80,7 +80,7 @@ class ExpenseItemType:
         if not self.product_id:
             return None
 
-        loader = info.context["product_loader"]
+        loader = info.context.product_loader
         return await loader.load(self.product_id)
 
     # --------------------------------------------------------
@@ -104,7 +104,7 @@ class ExpenseItemType:
         """
         Calculate total amount paid for this expense
         """
-        loader = info.context["payments_by_expense_loader"]
+        loader = info.context.payments_by_expense_loader
         payments = await loader.load(self.id)
 
         return sum((p.amount for p in payments), Decimal("0"))

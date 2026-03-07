@@ -31,28 +31,6 @@ from POS.dataloaders import create_pos_dataloaders
 from .middleware import JWTMiddleware
 
 
-# -------------------------------------------------
-# Context Function (single source of truth)
-# -------------------------------------------------
-def get_context(request):
-    """
-    Attaches request + all dataloaders to GraphQL context.
-
-    This is the ONLY place context is built.
-    Prevents N+1 queries via request-scoped dataloaders.
-    """
-
-    return {
-        "request": request,
-        "user": request.user,  # unified access (POS, Inventory, Expenses)
-        # ------------------
-        # Dataloaders
-        # ------------------
-        **create_expenses_dataloaders(),
-        **create_inventory_dataloaders(),
-        **create_pos_dataloaders(),
-    }
-
 
 # -------------------------------------------------
 # Root Query (composition only)

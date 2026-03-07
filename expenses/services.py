@@ -1,6 +1,6 @@
 # expenses/services.py
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404
@@ -135,12 +135,19 @@ def create_expense_item(
     if unit_price <= 0:
         raise ValidationError("Unit price must be greater than zero.")
 
+    # Pre-compute total_price so full_clean() does not find it null
+    total_price = (quantity * unit_price).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
+
     expense = ExpenseItem(
         supplier=supplier,
         product=product,
         item_name=cleaned_item,
         quantity=quantity,
         unit_price=unit_price,
+        total_price=total_price,       # 👈 fix
     )
 
     expense.full_clean()
