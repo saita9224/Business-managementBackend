@@ -1,3 +1,5 @@
+# inventory/mutations.py
+
 from typing import Optional
 
 import strawberry
@@ -8,6 +10,7 @@ from asgiref.sync import sync_to_async
 from employees.decorators import permission_required
 
 from .models import Product
+from .queries import wrap_product  # 👈 added
 from .services import (
     add_stock as add_stock_service,
     remove_stock as remove_stock_service,
@@ -63,16 +66,25 @@ class InventoryMutation:
         input: CreateProductInput,
     ) -> ProductType:
 
-        employee = info.context.user
-
-        def create():
-            return Product.objects.create(
+        def get_or_create():
+            product, created = Product.objects.get_or_create(
                 name=input.name,
-                unit=input.unit,
-                category=input.category,
+                defaults={
+                    "unit": input.unit,
+                    "category": input.category,
+                },
             )
+            return product, created
 
-        return await sync_to_async(create)()
+        product, created = await sync_to_async(get_or_create)()
+
+        if not created:
+            # Product already exists — load real current stock
+            stock = await info.context.current_stock_loader.load(product.id)
+            return wrap_product(product, float(stock or 0))
+
+        # New product — stock always starts at 0
+        return wrap_product(product, 0.0)
 
 
     # --------------------------------------------------------
@@ -95,12 +107,18 @@ class InventoryMutation:
         except Product.DoesNotExist:
             raise GraphQLError("Product not found")
 
+        expense_item_id = (
+            int(input.expense_item_id)
+            if input.expense_item_id
+            else None
+        )
+
         return await sync_to_async(add_stock_service)(
             product=product,
             quantity=input.quantity,
             reason=input.reason,
             funded_by_business=input.funded_by_business,
-            expense_item=input.expense_item_id,
+            expense_item_id=expense_item_id,
             group_id=input.group_id,
             notes=input.notes,
             performed_by=employee,

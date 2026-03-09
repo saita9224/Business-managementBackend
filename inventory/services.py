@@ -1,3 +1,5 @@
+# inventory/services.py
+
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -39,7 +41,7 @@ def add_stock(
     quantity: float,
     reason: str,
     performed_by,
-    expense_item=None,
+    expense_item_id: int | None = None,      # 👈 fixed: was expense_item object
     funded_by_business: bool = True,
     group_id: str | None = None,
     notes: str | None = None,
@@ -70,11 +72,22 @@ def add_stock(
     if (
         funded_by_business
         and reason == StockMovement.PURCHASE
-        and expense_item is None
+        and expense_item_id is None
     ):
         raise ValidationError(
             "Business-funded purchases must be linked to an expense item"
         )
+
+    # 👇 Resolve expense_item object from ID if provided
+    expense_item = None
+    if expense_item_id is not None:
+        from expenses.models import ExpenseItem
+        try:
+            expense_item = ExpenseItem.objects.get(pk=expense_item_id)
+        except ExpenseItem.DoesNotExist:
+            raise ValidationError(
+                f"Expense item with ID {expense_item_id} does not exist"
+            )
 
     return StockMovement.objects.create(
         product=product,

@@ -1,3 +1,5 @@
+# inventory/queries.py
+
 from typing import List, Optional
 
 import strawberry
@@ -14,6 +16,22 @@ from .types import (
     InventoryAuditType,
     StockReconciliationType,
 )
+
+
+# ============================================================
+# HELPER — wraps a Product + resolved stock into ProductType
+# ============================================================
+
+def wrap_product(product: Product, current_stock: float) -> ProductType:
+    instance = ProductType(
+        id=product.id,
+        name=product.name,
+        category=product.category,
+        unit=product.unit,
+        created_at=product.created_at,
+    )
+    
+    return instance
 
 
 # ============================================================
@@ -35,6 +53,7 @@ class InventoryQuery:
         category: Optional[str] = None,
     ) -> List[ProductType]:
 
+        # Step 1: fetch products from DB
         def fetch():
             qs = Product.objects.all().order_by("name")
             if search:
@@ -43,7 +62,22 @@ class InventoryQuery:
                 qs = qs.filter(category=category)
             return list(qs)
 
-        return await sync_to_async(fetch)()
+        products = await sync_to_async(fetch)()
+
+        if not products:
+            return []
+
+        # Step 2: batch-load stock for all products in one query
+        product_ids = [p.id for p in products]
+        stock_values = await info.context.current_stock_loader.load_many(
+            product_ids
+        )
+
+        # Step 3: zip products with their stock values
+        return [
+            wrap_product(p, float(stock or 0))
+            for p, stock in zip(products, stock_values)
+        ]
 
 
     # --------------------------------------------------------
@@ -57,10 +91,20 @@ class InventoryQuery:
         id: strawberry.ID,
     ) -> ProductType:
 
-        try:
-            return await sync_to_async(Product.objects.get)(pk=id)
-        except Product.DoesNotExist:
+        def fetch():
+            try:
+                return Product.objects.get(pk=id)
+            except Product.DoesNotExist:
+                return None
+
+        product = await sync_to_async(fetch)()
+        if product is None:
             raise GraphQLError("Product not found")
+
+        # Single load — still uses DataLoader (batches if called in parallel)
+        stock = await info.context.current_stock_loader.load(product.id)
+
+        return wrap_product(product, float(stock or 0))
 
 
     # --------------------------------------------------------
@@ -98,17 +142,25 @@ class InventoryQuery:
         product_id: strawberry.ID,
     ) -> InventoryAuditType:
 
-        try:
-            product = await sync_to_async(Product.objects.get)(pk=product_id)
-        except Product.DoesNotExist:
+        def fetch():
+            try:
+                return Product.objects.get(pk=product_id)
+            except Product.DoesNotExist:
+                return None
+
+        product = await sync_to_async(fetch)()
+        if product is None:
             raise GraphQLError("Product not found")
 
-        movements = await info.context[
-            "movements_by_product_loader"
-        ].load(product.id)
+        # Both DataLoaders fire concurrently
+        import asyncio
+        stock, movements = await asyncio.gather(
+            info.context.current_stock_loader.load(product.id),
+            info.context.movements_by_product_loader.load(product.id),
+        )
 
         return InventoryAuditType(
-            product=product,
+            product=wrap_product(product, float(stock or 0)),
             movements=movements,
         )
 
@@ -133,18 +185,26 @@ class InventoryQuery:
 
         reconciliations = await sync_to_async(fetch)()
 
-        # 🔥 CLEAN WRAPPING (MODEL → GRAPHQL TYPE)
+        if not reconciliations:
+            return []
+
+        # Batch-load stock for all products in reconciliations
+        product_ids = [r.product.id for r in reconciliations]
+        stock_values = await info.context.current_stock_loader.load_many(
+            product_ids
+        )
+
         return [
             StockReconciliationType(
                 id=r.id,
-                product=r.product,
-                expected_quantity=r.expected_quantity,
+                product=wrap_product(r.product, float(stock or 0)),
+                system_quantity=r.system_quantity,
                 counted_quantity=r.counted_quantity,
-                difference=r.counted_quantity - r.expected_quantity,
+                difference=r.counted_quantity - r.system_quantity,
                 status=r.status,
                 counted_at=r.counted_at,
                 counted_by=r.counted_by,
                 notes=r.notes,
             )
-            for r in reconciliations
+            for r, stock in zip(reconciliations, stock_values)
         ]

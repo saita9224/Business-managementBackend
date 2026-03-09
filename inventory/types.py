@@ -1,3 +1,5 @@
+# inventory/types.py
+
 from typing import List, Optional
 from datetime import datetime
 
@@ -10,7 +12,7 @@ from employees.types import EmployeeType
 
 
 # ============================================================
-# RBAC HELPERS
+# AUTH HELPER (no DB call — just checks if user is set)
 # ============================================================
 
 def require_auth(info: Info):
@@ -18,11 +20,6 @@ def require_auth(info: Info):
     if not employee or not employee.is_authenticated:
         raise GraphQLError("Authentication required")
     return employee
-
-
-def require_permission(employee, perm: str):
-    if not employee.has_permission(perm):
-        raise GraphQLError(f"Permission denied: {perm}")
 
 
 # ============================================================
@@ -34,11 +31,8 @@ class ExpenseLinkType:
     id: strawberry.ID
     item_name: str
     total_price: float
-    paid_amount: float
-    balance: float
     funded_by_business: bool
     created_at: datetime
-    performed_by: Optional[EmployeeType]
 
 
 # ============================================================
@@ -48,7 +42,7 @@ class ExpenseLinkType:
 @strawberry.type
 class StockMovementType:
     id: strawberry.ID
-    movement_type: str  # IN / OUT / ADJUSTMENT
+    movement_type: str
     reason: str
     quantity: float
     group_id: Optional[str]
@@ -58,9 +52,6 @@ class StockMovementType:
     expense_item_id: Optional[strawberry.ID]
     performed_by: Optional[EmployeeType]
 
-    # --------------------------------------------------------
-    # PRIVATE INTERNAL FIELD (NOT IN GRAPHQL SCHEMA)
-    # --------------------------------------------------------
     _funded_by_business: Private[Optional[bool]]
 
     # --------------------------------------------------------
@@ -73,29 +64,27 @@ class StockMovementType:
         return None
 
     # --------------------------------------------------------
-    # Linked Expense (STRICT RBAC)
+    # Linked Expense
     # --------------------------------------------------------
     @strawberry.field
     async def expense(self, info: Info) -> Optional[ExpenseLinkType]:
-        employee = require_auth(info)
-        require_permission(employee, "expenses.view_expense")
+        require_auth(info)
 
         if not self.expense_item_id:
             return None
 
-        expense = await info.context["expense_loader"].load(self.expense_item_id)
+        expense = await info.context.expense_loader.load(
+            int(self.expense_item_id)
+        )
         if not expense:
             return None
 
         return ExpenseLinkType(
             id=expense.id,
             item_name=expense.item_name,
-            total_price=expense.total_price,
-            paid_amount=expense.total_price - expense.balance,
-            balance=expense.balance,
+            total_price=float(expense.total_price),
             funded_by_business=self._funded_by_business or False,
             created_at=expense.created_at,
-            performed_by=expense.performed_by,
         )
 
 
@@ -111,40 +100,36 @@ class ProductType:
     unit: str
     created_at: datetime
 
-    # --------------------------------------------------------
-    # PRIVATE FIELD
-    # --------------------------------------------------------
     _current_stock: Private[float]
 
     # --------------------------------------------------------
-    # Current stock (RBAC)
+    # Current stock
     # --------------------------------------------------------
     @strawberry.field
     def current_stock(self, info: Info) -> float:
-        employee = require_auth(info)
-        require_permission(employee, "inventory.view_stock")
+        require_auth(info)
         return self._current_stock
 
     # --------------------------------------------------------
-    # Movements (STRICT RBAC)
+    # Movements
     # --------------------------------------------------------
     @strawberry.field
     async def movements(self, info: Info) -> List[StockMovementType]:
-        employee = require_auth(info)
-        require_permission(employee, "inventory.view_movements")
-
-        return await info.context["movements_by_product_loader"].load(self.id)
+        require_auth(info)
+        return await info.context.movements_by_product_loader.load(
+            int(self.id)
+        )
 
 
 # ============================================================
-# STOCK RECONCILIATION (COUNT & ADJUSTMENT WORKFLOW)
+# STOCK RECONCILIATION
 # ============================================================
 
 @strawberry.type
 class StockReconciliationType:
     id: strawberry.ID
     product: ProductType
-    expected_quantity: float
+    system_quantity: float
     counted_quantity: float
     difference: float
     status: str

@@ -9,9 +9,10 @@ logger = logging.getLogger(__name__)
 
 class JWTMiddleware(SchemaExtension):
 
-    async def on_request_start(self):
+    async def on_operation(self):
         """
-        Async version – required because decode_jwt_token is async
+        Runs before and after every GraphQL operation.
+        Must yield to allow execution to proceed.
         """
 
         context = self.execution_context.context
@@ -27,7 +28,7 @@ class JWTMiddleware(SchemaExtension):
                 return ctx.get(key, default)
             return getattr(ctx, key, default)
 
-        # Default user
+        # Default to unauthenticated
         set_attr(context, "user", None)
 
         request = get_attr(context, "request")
@@ -49,8 +50,8 @@ class JWTMiddleware(SchemaExtension):
 
                         if user:
                             set_attr(context, "user", user)
-                            logger.debug(f"Authenticated user: {user.email}")
+                            logger.debug(f"Authenticated: {user.email}")
                         else:
-                            logger.debug("Invalid or expired JWT token")
+                            logger.debug("Invalid or expired token")
 
-        logger.debug("JWT middleware completed successfully")
+        yield  # 👈 resolvers execute here

@@ -64,6 +64,13 @@ class Employee(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         return self.name
 
+    def has_permission(self, permission, obj=None):
+        """
+        Alias required by Strawberry's AsyncGraphQLView which calls
+        has_permission() internally. Delegates to Django's has_perm().
+        """
+        return self.has_perm(permission, obj)
+
 
 # ======================================================
 # ROLE MODEL
