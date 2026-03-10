@@ -8,6 +8,7 @@ from employees.decorators import permission_required
 
 from .types import (
     ExpenseItemType,
+    ExpensePaymentType,
     SupplierType,
     ExpenseDetailsType,
 )
@@ -19,11 +20,42 @@ from .services import (
     get_expense_details,
 )
 
-from .models import Supplier, ExpenseItem
+from .models import Supplier, ExpenseItem, ExpensePayment
 
 
 @strawberry.type
 class ExpenseQuery:
+
+    # =========================================================
+    # ALL EXPENSES
+    # =========================================================
+
+    @strawberry.field
+    @permission_required("expenses.view")
+    async def all_expenses(self, info) -> List[ExpenseItemType]:
+        return await sync_to_async(list)(
+            ExpenseItem.objects
+            .select_related("supplier", "product")
+            .order_by("-created_at")
+        )
+
+    # =========================================================
+    # ALL PAYMENTS
+    # Returns every payment across all expenses ordered by
+    # paid_at desc. Frontend uses paid_at to group payments
+    # by day for accurate daily expenditure totals —
+    # a balance paid today on yesterday's expense appears
+    # under today, not yesterday.
+    # =========================================================
+
+    @strawberry.field
+    @permission_required("expenses.view")
+    async def all_payments(self, info) -> List[ExpensePaymentType]:
+        return await sync_to_async(list)(
+            ExpensePayment.objects
+            .select_related("expense", "expense__supplier")
+            .order_by("-paid_at")
+        )
 
     # =========================================================
     # SEARCH EXPENSES
@@ -36,13 +68,9 @@ class ExpenseQuery:
         info,
         supplier_id: int,
     ) -> List[ExpenseItemType]:
-        """
-        Return all expenses belonging to a supplier.
-        """
         return await sync_to_async(list)(
             list_expenses_by_supplier(supplier_id)
         )
-
 
     @strawberry.field
     @permission_required("expenses.view")
@@ -51,13 +79,9 @@ class ExpenseQuery:
         info,
         item_name: str,
     ) -> List[ExpenseItemType]:
-        """
-        Search expenses by item name.
-        """
         return await sync_to_async(list)(
             list_expenses_by_item_name(item_name)
         )
-
 
     @strawberry.field
     @permission_required("expenses.view")
@@ -66,13 +90,9 @@ class ExpenseQuery:
         info,
         product_id: int,
     ) -> List[ExpenseItemType]:
-        """
-        Return expenses for a specific product.
-        """
         return await sync_to_async(list)(
             list_expenses_by_product(product_id)
         )
-
 
     # =========================================================
     # SUPPLIERS
@@ -81,16 +101,9 @@ class ExpenseQuery:
     @strawberry.field
     @permission_required("expenses.view")
     async def suppliers(self, info) -> List[SupplierType]:
-        """
-        Return all suppliers.
-        """
-
         return await sync_to_async(list)(
-            Supplier.objects
-            .all()
-            .order_by("name")
+            Supplier.objects.all().order_by("name")
         )
-
 
     # =========================================================
     # EXPENSE DETAILS
@@ -103,32 +116,9 @@ class ExpenseQuery:
         info,
         expense_id: int,
     ) -> ExpenseDetailsType:
-        """
-        Detailed expense including payments and remaining balance.
-        """
-
         result = await sync_to_async(get_expense_details)(expense_id)
-
         return ExpenseDetailsType(
             expense=result["expense"],
             payments=result["payments"],
             remaining_balance=result["remaining_balance"],
-        )
-
-
-    # =========================================================
-    # ALL EXPENSES
-    # =========================================================
-
-    @strawberry.field
-    @permission_required("expenses.view")
-    async def all_expenses(self, info) -> List[ExpenseItemType]:
-        """
-        Return all expenses ordered by newest first.
-        """
-
-        return await sync_to_async(list)(
-            ExpenseItem.objects
-            .select_related("supplier", "product")
-            .order_by("-created_at")
         )

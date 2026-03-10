@@ -1,6 +1,7 @@
 # inventory/queries.py
 
 from typing import List, Optional
+import asyncio
 
 import strawberry
 from strawberry.types import Info
@@ -23,15 +24,14 @@ from .types import (
 # ============================================================
 
 def wrap_product(product: Product, current_stock: float) -> ProductType:
-    instance = ProductType(
+    return ProductType(
         id=product.id,
         name=product.name,
         category=product.category,
         unit=product.unit,
         created_at=product.created_at,
+        _current_stock=current_stock,   # 👈 this was missing — causes the crash
     )
-    
-    return instance
 
 
 # ============================================================
@@ -53,7 +53,6 @@ class InventoryQuery:
         category: Optional[str] = None,
     ) -> List[ProductType]:
 
-        # Step 1: fetch products from DB
         def fetch():
             qs = Product.objects.all().order_by("name")
             if search:
@@ -67,13 +66,9 @@ class InventoryQuery:
         if not products:
             return []
 
-        # Step 2: batch-load stock for all products in one query
         product_ids = [p.id for p in products]
-        stock_values = await info.context.current_stock_loader.load_many(
-            product_ids
-        )
+        stock_values = await info.context.current_stock_loader.load_many(product_ids)
 
-        # Step 3: zip products with their stock values
         return [
             wrap_product(p, float(stock or 0))
             for p, stock in zip(products, stock_values)
@@ -101,9 +96,7 @@ class InventoryQuery:
         if product is None:
             raise GraphQLError("Product not found")
 
-        # Single load — still uses DataLoader (batches if called in parallel)
         stock = await info.context.current_stock_loader.load(product.id)
-
         return wrap_product(product, float(stock or 0))
 
 
@@ -152,8 +145,6 @@ class InventoryQuery:
         if product is None:
             raise GraphQLError("Product not found")
 
-        # Both DataLoaders fire concurrently
-        import asyncio
         stock, movements = await asyncio.gather(
             info.context.current_stock_loader.load(product.id),
             info.context.movements_by_product_loader.load(product.id),
@@ -188,11 +179,8 @@ class InventoryQuery:
         if not reconciliations:
             return []
 
-        # Batch-load stock for all products in reconciliations
         product_ids = [r.product.id for r in reconciliations]
-        stock_values = await info.context.current_stock_loader.load_many(
-            product_ids
-        )
+        stock_values = await info.context.current_stock_loader.load_many(product_ids)
 
         return [
             StockReconciliationType(

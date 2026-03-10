@@ -34,6 +34,7 @@ def _validate_reason(reason: str):
 # ======================================================
 # STOCK IN
 # ======================================================
+
 @transaction.atomic
 def add_stock(
     *,
@@ -41,33 +42,22 @@ def add_stock(
     quantity: float,
     reason: str,
     performed_by,
-    expense_item_id: int | None = None,      # 👈 fixed: was expense_item object
+    expense_item_id: int | None = None,
     funded_by_business: bool = True,
     group_id: str | None = None,
     notes: str | None = None,
 ) -> StockMovement:
-    """
-    Adds stock to inventory (IN movement).
-
-    Used for:
-    - Purchases
-    - Returns
-    - Positive adjustments
-    """
 
     _validate_quantity(quantity)
     _validate_user(performed_by, "performed_by")
     _validate_reason(reason)
 
-    # ---- Business rules ----
     if reason not in {
         StockMovement.PURCHASE,
         StockMovement.RETURN,
         StockMovement.ADJUSTMENT,
     }:
-        raise ValidationError(
-            f"Reason '{reason}' is not valid for stock IN"
-        )
+        raise ValidationError(f"Reason '{reason}' is not valid for stock IN")
 
     if (
         funded_by_business
@@ -78,7 +68,6 @@ def add_stock(
             "Business-funded purchases must be linked to an expense item"
         )
 
-    # 👇 Resolve expense_item object from ID if provided
     expense_item = None
     if expense_item_id is not None:
         from expenses.models import ExpenseItem
@@ -105,6 +94,7 @@ def add_stock(
 # ======================================================
 # STOCK OUT
 # ======================================================
+
 @transaction.atomic
 def remove_stock(
     *,
@@ -115,22 +105,11 @@ def remove_stock(
     group_id: str | None = None,
     notes: str | None = None,
 ) -> StockMovement:
-    """
-    Removes stock from inventory (OUT movement).
-
-    Used for:
-    - POS sales
-    - Cooking / production
-    - Damage
-    - Loss
-    - Negative adjustments
-    """
 
     _validate_quantity(quantity)
     _validate_user(performed_by, "performed_by")
     _validate_reason(reason)
 
-    # ---- Business rules ----
     if reason not in {
         StockMovement.SALE,
         StockMovement.COOKING,
@@ -138,11 +117,8 @@ def remove_stock(
         StockMovement.LOST,
         StockMovement.ADJUSTMENT,
     }:
-        raise ValidationError(
-            f"Reason '{reason}' is not valid for stock OUT"
-        )
+        raise ValidationError(f"Reason '{reason}' is not valid for stock OUT")
 
-    # Enforce inventory reality
     available_stock = product.current_stock
     if available_stock < quantity:
         raise ValidationError(
@@ -161,19 +137,121 @@ def remove_stock(
 
 
 # ======================================================
+# ADD STOCK FROM EXPENSE — ATOMIC (matched product flow)
+# Links an existing expense to an existing product.
+# Stock movement and expense link written in one transaction.
+# If anything fails, nothing is saved.
+# ======================================================
+
+@transaction.atomic
+def add_stock_from_expense(
+    *,
+    product_id: int,
+    quantity: float,
+    expense_item_id: int,
+    performed_by,
+) -> StockMovement:
+
+    from expenses.models import ExpenseItem
+
+    _validate_quantity(quantity)
+    _validate_user(performed_by, "performed_by")
+
+    try:
+        product = Product.objects.get(pk=product_id)
+    except Product.DoesNotExist:
+        raise ValidationError(f"Product with ID {product_id} does not exist")
+
+    try:
+        expense_item = ExpenseItem.objects.get(pk=expense_item_id)
+    except ExpenseItem.DoesNotExist:
+        raise ValidationError(
+            f"Expense item with ID {expense_item_id} does not exist"
+        )
+
+    return StockMovement.objects.create(
+        product=product,
+        quantity=quantity,
+        movement_type=StockMovement.IN,
+        reason=StockMovement.PURCHASE,
+        expense_item=expense_item,
+        funded_by_business=True,
+        performed_by=performed_by,
+        notes=f"Stock added from expense #{expense_item_id}",
+    )
+
+
+# ======================================================
+# CREATE PRODUCT WITH INITIAL STOCK — ATOMIC (new product flow)
+# Creates product + stock movement in one transaction.
+# If either step fails everything rolls back —
+# no orphaned products, no unlinked stock movements.
+# ======================================================
+
+@transaction.atomic
+def create_product_with_stock(
+    *,
+    name: str,
+    unit: str,
+    category: str | None,
+    quantity: float,
+    expense_item_id: int,
+    performed_by,
+) -> dict:
+
+    from expenses.models import ExpenseItem
+
+    _validate_quantity(quantity)
+    _validate_user(performed_by, "performed_by")
+
+    name = (name or "").strip()
+    if not name:
+        raise ValidationError("Product name is required")
+
+    try:
+        expense_item = ExpenseItem.objects.get(pk=expense_item_id)
+    except ExpenseItem.DoesNotExist:
+        raise ValidationError(
+            f"Expense item with ID {expense_item_id} does not exist"
+        )
+
+    product, created = Product.objects.get_or_create(
+        name__iexact=name,
+        defaults={
+            "name": name,
+            "unit": unit,
+            "category": category,
+        },
+    )
+
+    movement = StockMovement.objects.create(
+        product=product,
+        quantity=quantity,
+        movement_type=StockMovement.IN,
+        reason=StockMovement.PURCHASE,
+        expense_item=expense_item,
+        funded_by_business=True,
+        performed_by=performed_by,
+        notes=f"Initial stock from expense #{expense_item_id}",
+    )
+
+    return {
+        "product": product,
+        "movement": movement,
+        "created": created,
+    }
+
+
+# ======================================================
 # APPROVE RECONCILIATION
 # ======================================================
+
 @transaction.atomic
 def approve_reconciliation(
     *,
     reconciliation: StockReconciliation,
     approved_by,
 ) -> StockMovement | None:
-    """
-    Approves a stock reconciliation.
-
-    Creates an ADJUSTMENT StockMovement if there is a difference.
-    """
 
     if reconciliation.status != StockReconciliation.PENDING:
         raise ValidationError("Only pending reconciliations can be approved")
@@ -183,14 +261,10 @@ def approve_reconciliation(
     reconciliation.status = StockReconciliation.APPROVED
     reconciliation.approved_by = approved_by
     reconciliation.approved_at = timezone.now()
-    reconciliation.save(update_fields=[
-        "status",
-        "approved_by",
-        "approved_at",
-    ])
+    reconciliation.save(update_fields=["status", "approved_by", "approved_at"])
 
     if reconciliation.difference == 0:
-        return None  # No stock impact
+        return None
 
     movement_type = (
         StockMovement.IN
@@ -213,33 +287,26 @@ def approve_reconciliation(
 # ======================================================
 # REJECT RECONCILIATION
 # ======================================================
+
 @transaction.atomic
 def reject_reconciliation(
     *,
     reconciliation: StockReconciliation,
-    rejected_by,
+    approved_by,
     notes: str | None = None,
 ) -> StockReconciliation:
-    """
-    Rejects a stock reconciliation.
-
-    No inventory impact.
-    """
 
     if reconciliation.status != StockReconciliation.PENDING:
         raise ValidationError("Only pending reconciliations can be rejected")
 
-    _validate_user(rejected_by, "rejected_by")
+    _validate_user(approved_by, "approved_by")
 
     reconciliation.status = StockReconciliation.REJECTED
-    reconciliation.approved_by = rejected_by
+    reconciliation.approved_by = approved_by
     reconciliation.approved_at = timezone.now()
     reconciliation.notes = notes
     reconciliation.save(update_fields=[
-        "status",
-        "approved_by",
-        "approved_at",
-        "notes",
+        "status", "approved_by", "approved_at", "notes",
     ])
 
     return reconciliation
