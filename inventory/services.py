@@ -310,3 +310,60 @@ def reject_reconciliation(
     ])
 
     return reconciliation
+
+# ADD to bottom of inventory/services.py
+
+# ======================================================
+# SUBMIT STOCK RECONCILIATION (BULK)
+# Accepts a list of {product_id, counted_quantity} pairs.
+# Fetches current system stock for each, computes difference,
+# and bulk-creates StockReconciliation records as PENDING.
+# ======================================================
+
+@transaction.atomic
+def submit_reconciliation(
+    *,
+    counts: list[dict],   # [{"product_id": int, "counted_quantity": float}]
+    counted_by,
+) -> list[StockReconciliation]:
+
+    _validate_user(counted_by, "counted_by")
+
+    if not counts:
+        raise ValidationError("No counts provided")
+
+    product_ids = [c["product_id"] for c in counts]
+    products_map = {
+        p.id: p
+        for p in Product.objects.filter(pk__in=product_ids)
+    }
+
+    reconciliations = []
+    for entry in counts:
+        pid = entry["product_id"]
+        counted_qty = entry["counted_quantity"]
+
+        if counted_qty < 0:
+            raise ValidationError(
+                f"Counted quantity cannot be negative for product {pid}"
+            )
+
+        product = products_map.get(pid)
+        if not product:
+            raise ValidationError(f"Product with ID {pid} not found")
+
+        system_qty = float(product.current_stock)
+        difference = counted_qty - system_qty
+
+        reconciliations.append(
+            StockReconciliation(
+                product=product,
+                system_quantity=system_qty,
+                counted_quantity=counted_qty,
+                difference=difference,
+                status=StockReconciliation.PENDING,
+                counted_by=counted_by,
+            )
+        )
+
+    return StockReconciliation.objects.bulk_create(reconciliations)

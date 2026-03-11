@@ -1,4 +1,4 @@
-# pos/services.py
+# POS/services.py
 
 from decimal import Decimal
 from django.core.exceptions import ValidationError
@@ -48,13 +48,11 @@ def close_pos_session(
 ) -> POSSession:
 
     session = get_object_or_404(POSSession, id=session_id, is_active=True)
-
     session.closing_cash = Decimal(str(closing_cash))
     session.closed_at = timezone.now()
     session.is_active = False
     session.full_clean()
     session.save()
-
     return session
 
 
@@ -67,10 +65,7 @@ def create_order(
     created_by: Employee,
 ) -> Order:
 
-    order = Order(
-        receipt=receipt,
-        created_by=created_by,
-    )
+    order = Order(receipt=receipt, created_by=created_by)
     order.full_clean()
     order.save()
     return order
@@ -91,26 +86,50 @@ def add_order_item(
         raise ValidationError("Quantity must be greater than zero.")
 
     final_price = Decimal(str(final_price))
-    listed_price = product.selling_price
+
+    # ── BUG FIX: product.selling_price doesn't exist on Product model.
+    # Price lists are stored in PriceListItem. We get the default price list
+    # price for this product, falling back to final_price if none found.
+    from .models import PriceListItem, PriceList
+    try:
+        default_price_list = PriceList.objects.get(is_default=True)
+        price_list_item = PriceListItem.objects.get(
+            price_list=default_price_list,
+            product_id=product.id,
+        )
+        listed_price = price_list_item.selling_price
+        price_list = default_price_list
+    except (PriceList.DoesNotExist, PriceListItem.DoesNotExist):
+        # Fall back: listed = final, no override
+        listed_price = final_price
+        price_list = PriceList.objects.filter(is_default=True).first()
+        if not price_list:
+            raise ValidationError(
+                "No default price list found. Please configure one before selling."
+            )
 
     price_overridden = final_price != listed_price
 
     if price_overridden and not price_override_reason:
         raise ValidationError("Price override requires a reason.")
 
+    line_total = final_price * Decimal(str(quantity))
+
     item = OrderItem(
         order=order,
-        product=product,
-        quantity=quantity,
+        product_id=product.id,
+        product_name=product.name,
+        price_list=price_list,
+        quantity=Decimal(str(quantity)),
         listed_price=listed_price,
         final_price=final_price,
         price_overridden=price_overridden,
         price_override_reason=price_override_reason or "",
         sold_by=sold_by,
+        line_total=line_total,
     )
     item.full_clean()
     item.save()
-
     return item
 
 
@@ -123,15 +142,8 @@ def finalize_receipt(
     performed_by: Employee,
     emit_stock: bool = True,
 ) -> Receipt:
-    """
-    Finalizes receipt:
-    - Validates receipt has orders
-    - Calculates totals
-    - Emits inventory stock ONLY for directly deductible products
-    - Always records POS stock audit
-    """
 
-    orders = receipt.orders.prefetch_related("items__product")
+    orders = receipt.orders.prefetch_related("items")
     if not orders.exists():
         raise ValidationError("A receipt cannot exist without orders.")
 
@@ -139,34 +151,33 @@ def finalize_receipt(
 
     for order in orders:
         for item in order.items.all():
-            line_total = item.final_price * Decimal(item.quantity)
+            line_total = item.final_price * item.quantity
             subtotal += line_total
 
-            # -------------------------------------------------
-            # INVENTORY DEDUCTION (STRICTLY PER PRODUCT)
-            # -------------------------------------------------
             inventory_deducted = False
             inventory_error = None
 
-            if emit_stock and item.product.auto_deduct_on_sale:
+            if emit_stock:
                 try:
-                    remove_stock(
-                        product=item.product,
-                        quantity=item.quantity,
-                        reason=StockMovement.SALE,
-                        performed_by=performed_by,
-                        group_id=str(receipt.id),
-                    )
-                    inventory_deducted = True
+                    product = Product.objects.get(pk=item.product_id)
+                    if product.auto_deduct_on_sale:
+                        remove_stock(
+                            product=product,
+                            quantity=float(item.quantity),
+                            reason=StockMovement.SALE,
+                            performed_by=performed_by,
+                            group_id=str(receipt.id),
+                        )
+                        inventory_deducted = True
+                except Product.DoesNotExist:
+                    inventory_error = f"Product {item.product_id} not found in inventory"
                 except ValidationError as exc:
                     inventory_error = str(exc)
 
-            # -------------------------------------------------
-            # POS AUDIT (ALWAYS RECORDED)
-            # -------------------------------------------------
+            # Always record audit regardless of deduction success
             POSStockMovement.objects.create(
                 receipt=receipt,
-                product=item.product,
+                product_id=item.product_id,
                 quantity=item.quantity,
                 deducted_from_inventory=inventory_deducted,
                 notes=inventory_error or "",
@@ -178,7 +189,6 @@ def finalize_receipt(
     receipt.status = Receipt.OPEN
     receipt.full_clean()
     receipt.save()
-
     return receipt
 
 
@@ -198,7 +208,6 @@ def accept_payment(
         raise ValidationError("Payment amount must be greater than zero.")
 
     receipt = Receipt.objects.select_for_update().get(pk=receipt_id)
-
     paid = sum(p.amount for p in receipt.payments.all())
     balance = receipt.total - paid
 
@@ -246,7 +255,6 @@ def create_credit_account(
 
     receipt.status = Receipt.CREDIT
     receipt.save(update_fields=["status"])
-
     return credit
 
 
@@ -270,5 +278,4 @@ def refund_receipt(
     receipt.refunded_by = refunded_by
     receipt.refunded_at = timezone.now()
     receipt.save()
-
     return receipt

@@ -1,4 +1,4 @@
-# pos/query.py
+# POS/queries.py
 
 from typing import List, Optional
 

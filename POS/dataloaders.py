@@ -1,4 +1,4 @@
-# pos/dataloaders.py
+# POS/dataloaders.py
 
 from asgiref.sync import sync_to_async
 from strawberry.dataloader import DataLoader
