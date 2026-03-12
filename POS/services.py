@@ -1,6 +1,7 @@
 # POS/services.py
 
 from decimal import Decimal
+from datetime import datetime
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404
@@ -56,6 +57,35 @@ def close_pos_session(
     return session
 
 
+# =============================== RECEIPT CREATION ===============================
+
+@transaction.atomic
+def create_receipt(
+    *,
+    session: POSSession,
+    created_by: Employee,
+    discount: Decimal | float | str = 0,
+) -> Receipt:
+    """
+    Creates a new empty receipt under the given session.
+    Receipt number is generated after save to include the DB-assigned ID.
+    Format: RCP-YYYYMMDD-{id zero-padded to 4 digits}
+    """
+    receipt = Receipt(
+        receipt_number="PENDING",
+        session=session,
+        created_by=created_by,
+        discount=Decimal(str(discount)),
+    )
+    receipt.save()
+
+    receipt.receipt_number = (
+        f"RCP-{datetime.now().strftime('%Y%m%d')}-{str(receipt.id).zfill(4)}"
+    )
+    receipt.save(update_fields=["receipt_number"])
+    return receipt
+
+
 # =============================== ORDERS ===============================
 
 @transaction.atomic
@@ -87,9 +117,6 @@ def add_order_item(
 
     final_price = Decimal(str(final_price))
 
-    # ── BUG FIX: product.selling_price doesn't exist on Product model.
-    # Price lists are stored in PriceListItem. We get the default price list
-    # price for this product, falling back to final_price if none found.
     from .models import PriceListItem, PriceList
     try:
         default_price_list = PriceList.objects.get(is_default=True)
@@ -100,7 +127,6 @@ def add_order_item(
         listed_price = price_list_item.selling_price
         price_list = default_price_list
     except (PriceList.DoesNotExist, PriceListItem.DoesNotExist):
-        # Fall back: listed = final, no override
         listed_price = final_price
         price_list = PriceList.objects.filter(is_default=True).first()
         if not price_list:
@@ -133,7 +159,7 @@ def add_order_item(
     return item
 
 
-# =============================== RECEIPTS ===============================
+# =============================== FINALIZE ===============================
 
 @transaction.atomic
 def finalize_receipt(
@@ -142,25 +168,43 @@ def finalize_receipt(
     performed_by: Employee,
     emit_stock: bool = True,
 ) -> Receipt:
+    """
+    Finalizes a receipt:
+    - Calculates subtotal and total from all order items.
+    - Per item: attempts stock deduction inside a savepoint.
+      - If deduction succeeds → audit: deducted_from_inventory=True
+      - If deduction fails   → savepoint rolls back StockMovement only.
+                               Audit record still written with deducted_from_inventory=False
+                               and the error captured in notes.
+                               Receipt finalization is NOT blocked.
+    """
 
     orders = receipt.orders.prefetch_related("items")
     if not orders.exists():
-        raise ValidationError("A receipt cannot exist without orders.")
+        raise ValidationError("Receipt has no orders.")
 
     subtotal = Decimal("0.00")
 
     for order in orders:
         for item in order.items.all():
-            line_total = item.final_price * item.quantity
-            subtotal += line_total
+            subtotal += item.final_price * item.quantity
 
             inventory_deducted = False
             inventory_error = None
+            product = None
 
-            if emit_stock:
+            # ── Fetch product for stock deduction + audit ──────────
+            try:
+                product = Product.objects.get(pk=item.product_id)
+            except Product.DoesNotExist:
+                inventory_error = f"Product {item.product_id} not found in inventory"
+
+            # ── Attempt stock deduction inside a savepoint ──────────
+            # Nested transaction.atomic() = savepoint inside outer @transaction.atomic
+            # If it raises, only the savepoint rolls back — receipt is unaffected
+            if emit_stock and product is not None and product.auto_deduct_on_sale:
                 try:
-                    product = Product.objects.get(pk=item.product_id)
-                    if product.auto_deduct_on_sale:
+                    with transaction.atomic():
                         remove_stock(
                             product=product,
                             quantity=float(item.quantity),
@@ -169,20 +213,21 @@ def finalize_receipt(
                             group_id=str(receipt.id),
                         )
                         inventory_deducted = True
-                except Product.DoesNotExist:
-                    inventory_error = f"Product {item.product_id} not found in inventory"
                 except ValidationError as exc:
                     inventory_error = str(exc)
+                except Exception as exc:
+                    inventory_error = f"Unexpected error: {str(exc)}"
 
-            # Always record audit regardless of deduction success
-            POSStockMovement.objects.create(
-                receipt=receipt,
-                product_id=item.product_id,
-                quantity=item.quantity,
-                deducted_from_inventory=inventory_deducted,
-                notes=inventory_error or "",
-                performed_by=performed_by,
-            )
+            # ── Audit record — always written ───────────────────────
+            if product is not None:
+                POSStockMovement.objects.create(
+                    receipt=receipt,
+                    product=product,
+                    quantity=item.quantity,
+                    deducted_from_inventory=inventory_deducted,
+                    notes=inventory_error or "",
+                    performed_by=performed_by,
+                )
 
     receipt.subtotal = subtotal
     receipt.total = subtotal - receipt.discount
