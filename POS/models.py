@@ -50,15 +50,20 @@ class POSSession(models.Model):
 
 class Receipt(models.Model):
 
-    OPEN = "OPEN"
-    PAID = "PAID"
-    CREDIT = "CREDIT"
-    REFUNDED = "REFUNDED"
+    # ── Status constants ──────────────────────────────────
+    DRAFT    = "DRAFT"      # created, items being added, not yet submitted
+    PENDING  = "PENDING"    # submitted by waiter, awaiting cashier payment
+    OPEN     = "OPEN"       # partially paid
+    PAID     = "PAID"       # fully paid
+    CREDIT   = "CREDIT"     # deferred to credit account
+    REFUNDED = "REFUNDED"   # refunded
 
     STATUS_CHOICES = [
-        (OPEN, "Open"),
-        (PAID, "Paid"),
-        (CREDIT, "Credit"),
+        (DRAFT,    "Draft"),
+        (PENDING,  "Pending"),
+        (OPEN,     "Open"),
+        (PAID,     "Paid"),
+        (CREDIT,   "Credit"),
         (REFUNDED, "Refunded"),
     ]
 
@@ -73,13 +78,20 @@ class Receipt(models.Model):
         on_delete=models.PROTECT,
         related_name="created_receipts"
     )
-    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=OPEN)
+    subtotal     = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    discount     = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total        = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    status       = models.CharField(max_length=20, choices=STATUS_CHOICES, default=DRAFT)
 
+    # ── Waiter annotation (optional free-text, e.g. "Window seat") ──
+    table_note   = models.CharField(max_length=100, blank=True, default="")
+
+    # ── Submission timestamp (set when waiter hits "Send Order") ──
+    submitted_at = models.DateTimeField(null=True, blank=True)
+
+    # ── Refund fields ─────────────────────────────────────
     refund_reason = models.TextField(blank=True, null=True)
-    refunded_by = models.ForeignKey(
+    refunded_by   = models.ForeignKey(
         Employee,
         null=True,
         blank=True,
@@ -105,9 +117,9 @@ class Order(models.Model):
         on_delete=models.PROTECT,
         related_name="orders"
     )
-    is_saved = models.BooleanField(default=True)
+    is_saved    = models.BooleanField(default=True)
     is_refunded = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"Order {self.id} ({self.receipt.receipt_number})"
@@ -119,24 +131,20 @@ class OrderItem(models.Model):
         on_delete=models.CASCADE,
         related_name="items"
     )
-    product_id = models.IntegerField()
+    product_id   = models.IntegerField()
     product_name = models.CharField(max_length=150)
-    price_list = models.ForeignKey(
-        PriceList,
-        on_delete=models.PROTECT
-    )
-    quantity = models.DecimalField(max_digits=10, decimal_places=2)
+    price_list   = models.ForeignKey(PriceList, on_delete=models.PROTECT)
+    quantity     = models.DecimalField(max_digits=10, decimal_places=2)
 
     listed_price = models.DecimalField(max_digits=12, decimal_places=2)
-    final_price = models.DecimalField(max_digits=12, decimal_places=2)
-    line_total = models.DecimalField(max_digits=12, decimal_places=2)
+    final_price  = models.DecimalField(max_digits=12, decimal_places=2)
+    line_total   = models.DecimalField(max_digits=12, decimal_places=2)
 
-    price_overridden = models.BooleanField(default=False)
-    price_override_by = models.ForeignKey(
+    price_overridden      = models.BooleanField(default=False)
+    price_override_by     = models.ForeignKey(
         Employee,
         on_delete=models.PROTECT,
-        null=True,
-        blank=True,
+        null=True, blank=True,
         related_name="price_overrides"
     )
     price_override_reason = models.CharField(max_length=255, null=True, blank=True)
@@ -144,8 +152,7 @@ class OrderItem(models.Model):
     sold_by = models.ForeignKey(
         Employee,
         on_delete=models.PROTECT,
-        null=True,       # nullable for migration compatibility only —
-        blank=True,      # service layer always passes this in practice
+        null=True, blank=True,
         related_name="sold_items"
     )
 
@@ -163,7 +170,7 @@ class Payment(models.Model):
         max_length=20,
         choices=[("CASH", "Cash"), ("MPESA", "Mpesa"), ("CARD", "Card")]
     )
-    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    amount      = models.DecimalField(max_digits=12, decimal_places=2)
     received_by = models.ForeignKey(
         Employee,
         on_delete=models.PROTECT,
@@ -181,16 +188,25 @@ class CreditAccount(models.Model):
         on_delete=models.CASCADE,
         related_name="credit_account"
     )
-    customer_name = models.CharField(max_length=150)
+    customer_name  = models.CharField(max_length=150)
     customer_phone = models.CharField(max_length=30, blank=True)
-    credit_amount = models.DecimalField(max_digits=12, decimal_places=2)
-    due_date = models.DateField()
-    approved_by = models.ForeignKey(
+    credit_amount  = models.DecimalField(max_digits=12, decimal_places=2)
+    due_date       = models.DateField()
+    approved_by    = models.ForeignKey(
         Employee,
         on_delete=models.PROTECT,
         related_name="approved_credits"
     )
     is_settled = models.BooleanField(default=False)
+
+    # ── Settlement tracking ───────────────────────────────
+    settled_by = models.ForeignKey(
+        Employee,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name="settled_credits"
+    )
+    settled_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"Credit {self.receipt.receipt_number}"
@@ -207,20 +223,49 @@ class POSStockMovement(models.Model):
         on_delete=models.PROTECT,
         related_name="pos_movements"
     )
-    quantity = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity                = models.DecimalField(max_digits=10, decimal_places=2)
     deducted_from_inventory = models.BooleanField(
         default=False,
         help_text="True if inventory.StockMovement was successfully written"
     )
-    notes = models.TextField(blank=True, null=True)
+    notes        = models.TextField(blank=True, null=True)
     performed_by = models.ForeignKey(
         Employee,
         on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        null=True, blank=True,
         related_name="pos_stock_movements"
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"Stock OUT {self.product.name} ({self.quantity})"
+
+
+class MenuItem(models.Model):
+    """
+    Represents an item on the business menu.
+
+    - Inventory-linked (product set): stock IS deducted on sale.
+    - Manual (product None): no inventory linkage, no stock deduction.
+
+    is_pinned=True items always appear first in the frequent items row.
+    """
+    name         = models.CharField(max_length=150)
+    emoji        = models.CharField(max_length=10, default="🛒")
+    price        = models.DecimalField(max_digits=12, decimal_places=2)
+    is_available = models.BooleanField(default=True)
+    is_pinned    = models.BooleanField(default=False)
+
+    product = models.OneToOneField(
+        "inventory.Product",
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="menu_item",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-is_pinned", "name"]
+
+    def __str__(self):
+        return f"{self.emoji} {self.name}"

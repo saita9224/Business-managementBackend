@@ -10,6 +10,7 @@ from django.utils import timezone
 from employees.models import Employee
 from inventory.models import Product, StockMovement
 from inventory.services import remove_stock
+from inventory.models import Product as InventoryProduct
 
 from .models import (
     POSSession,
@@ -19,6 +20,7 @@ from .models import (
     Payment,
     CreditAccount,
     POSStockMovement,
+    MenuItem,
 )
 
 
@@ -65,10 +67,11 @@ def create_receipt(
     session: POSSession,
     created_by: Employee,
     discount: Decimal | float | str = 0,
+    table_note: str = "",
 ) -> Receipt:
     """
-    Creates a new empty receipt under the given session.
-    Receipt number is generated after save to include the DB-assigned ID.
+    Creates a new DRAFT receipt under the given session.
+    Receipt number generated after save to include DB-assigned ID.
     Format: RCP-YYYYMMDD-{id zero-padded to 4 digits}
     """
     receipt = Receipt(
@@ -76,6 +79,8 @@ def create_receipt(
         session=session,
         created_by=created_by,
         discount=Decimal(str(discount)),
+        table_note=table_note,
+        status=Receipt.DRAFT,
     )
     receipt.save()
 
@@ -159,49 +164,67 @@ def add_order_item(
     return item
 
 
-# =============================== FINALIZE ===============================
+# =============================== SUBMIT ORDER (WAITER) ===============================
 
 @transaction.atomic
-def finalize_receipt(
+def submit_order(
     *,
     receipt: Receipt,
     performed_by: Employee,
     emit_stock: bool = True,
 ) -> Receipt:
-    """
-    Finalizes a receipt:
-    - Calculates subtotal and total from all order items.
-    - Per item: attempts stock deduction inside a savepoint.
-      - If deduction succeeds → audit: deducted_from_inventory=True
-      - If deduction fails   → savepoint rolls back StockMovement only.
-                               Audit record still written with deducted_from_inventory=False
-                               and the error captured in notes.
-                               Receipt finalization is NOT blocked.
-    """
 
-    orders = receipt.orders.prefetch_related("items")
-    if not orders.exists():
+    if receipt.status != Receipt.DRAFT:
+        raise ValidationError(
+            f"Only DRAFT receipts can be submitted. Current status: {receipt.status}"
+        )
+
+    # ── Debug: print what we find in the DB at submit time ──
+    from django.db import connection
+    print(f"\n=== SUBMIT ORDER DEBUG ===")
+    print(f"Receipt ID: {receipt.pk}")
+    print(f"Receipt status: {receipt.status}")
+
+    # Direct DB count — bypasses ALL ORM caching
+    order_count = Order.objects.filter(receipt_id=receipt.pk).count()
+    print(f"Orders in DB for this receipt: {order_count}")
+
+    if order_count > 0:
+        for o in Order.objects.filter(receipt_id=receipt.pk):
+            item_count = OrderItem.objects.filter(order_id=o.pk).count()
+            print(f"  Order {o.pk}: {item_count} items")
+            for i in OrderItem.objects.filter(order_id=o.pk):
+                print(f"    Item: {i.product_name} x {i.quantity} @ {i.final_price}")
+
+    print(f"=========================\n")
+
+    orders = list(
+        Order.objects
+        .filter(receipt_id=receipt.pk)
+        .prefetch_related("items")
+    )
+
+    if not orders:
         raise ValidationError("Receipt has no orders.")
 
     subtotal = Decimal("0.00")
 
     for order in orders:
-        for item in order.items.all():
+        items = list(order.items.all())
+        print(f"Order {order.pk} has {len(items)} items in prefetch")
+        for item in items:
             subtotal += item.final_price * item.quantity
+            print(f"  Adding: {item.product_name} {item.final_price} x {item.quantity}")
 
             inventory_deducted = False
-            inventory_error = None
-            product = None
+            inventory_error    = None
+            product            = None
 
-            # ── Fetch product for stock deduction + audit ──────────
             try:
                 product = Product.objects.get(pk=item.product_id)
             except Product.DoesNotExist:
                 inventory_error = f"Product {item.product_id} not found in inventory"
 
-            # ── Attempt stock deduction inside a savepoint ──────────
-            # Nested transaction.atomic() = savepoint inside outer @transaction.atomic
-            # If it raises, only the savepoint rolls back — receipt is unaffected
             if emit_stock and product is not None and product.auto_deduct_on_sale:
                 try:
                     with transaction.atomic():
@@ -218,7 +241,6 @@ def finalize_receipt(
                 except Exception as exc:
                     inventory_error = f"Unexpected error: {str(exc)}"
 
-            # ── Audit record — always written ───────────────────────
             if product is not None:
                 POSStockMovement.objects.create(
                     receipt=receipt,
@@ -229,15 +251,72 @@ def finalize_receipt(
                     performed_by=performed_by,
                 )
 
-    receipt.subtotal = subtotal
-    receipt.total = subtotal - receipt.discount
-    receipt.status = Receipt.OPEN
+    print(f"Final subtotal: {subtotal}")
+
+    receipt.subtotal     = subtotal
+    receipt.total        = subtotal - receipt.discount
+    receipt.status       = Receipt.PENDING
+    receipt.submitted_at = timezone.now()
     receipt.full_clean()
     receipt.save()
     return receipt
 
 
-# =============================== PAYMENTS ===============================
+# =============================== RECALL ORDER (WAITER) ===============================
+
+@transaction.atomic
+def recall_order(
+    *,
+    receipt: Receipt,
+    recalled_by: Employee,
+) -> Receipt:
+    """
+    Waiter action — recalls a PENDING receipt back to DRAFT so items
+    can be added or modified before re-submitting.
+
+    Only the original creator can recall (enforced in the mutation).
+    Reverses any stock deductions that were made on submit.
+    """
+
+    if receipt.status != Receipt.PENDING:
+        raise ValidationError(
+            f"Only PENDING receipts can be recalled. Current status: {receipt.status}"
+        )
+
+    # ── Reverse stock deductions that were emitted on submit ──
+    stock_movements = POSStockMovement.objects.filter(
+        receipt=receipt,
+        deducted_from_inventory=True,
+    ).select_related("product")
+
+    for movement in stock_movements:
+        try:
+            with transaction.atomic():
+                from inventory.services import add_stock
+                add_stock(
+                    product=movement.product,
+                    quantity=float(movement.quantity),
+                    reason=StockMovement.ADJUSTMENT,
+                    performed_by=recalled_by,
+                    notes=f"Stock reversal — order recalled: {receipt.receipt_number}",
+                )
+                movement.deducted_from_inventory = False
+                movement.notes = "Reversed on recall"
+                movement.save(update_fields=["deducted_from_inventory", "notes"])
+        except Exception:
+            # Reversal failure is logged but does not block recall
+            movement.notes = "Reversal failed on recall"
+            movement.save(update_fields=["notes"])
+
+    receipt.status       = Receipt.DRAFT
+    receipt.submitted_at = None
+    receipt.subtotal     = Decimal("0.00")
+    receipt.total        = Decimal("0.00")
+    receipt.save(update_fields=["status", "submitted_at", "subtotal", "total"])
+    return receipt
+
+
+# =============================== PAYMENTS (CASHIER) ===============================
 
 @transaction.atomic
 def accept_payment(
@@ -247,13 +326,24 @@ def accept_payment(
     method: str,
     received_by: Employee,
 ) -> Payment:
+    """
+    Cashier action — records a payment against a PENDING or OPEN receipt.
+    PENDING → OPEN on first partial payment.
+    OPEN / PENDING → PAID when balance reaches zero.
+    """
 
-    amount = Decimal(str(amount))
+    amount  = Decimal(str(amount))
     if amount <= 0:
         raise ValidationError("Payment amount must be greater than zero.")
 
     receipt = Receipt.objects.select_for_update().get(pk=receipt_id)
-    paid = sum(p.amount for p in receipt.payments.all())
+
+    if receipt.status not in {Receipt.PENDING, Receipt.OPEN}:
+        raise ValidationError(
+            f"Cannot accept payment on a {receipt.status} receipt."
+        )
+
+    paid    = sum(p.amount for p in receipt.payments.all())
     balance = receipt.total - paid
 
     if amount > balance:
@@ -270,12 +360,14 @@ def accept_payment(
 
     if amount == balance:
         receipt.status = Receipt.PAID
-        receipt.save(update_fields=["status"])
+    else:
+        receipt.status = Receipt.OPEN
 
+    receipt.save(update_fields=["status"])
     return payment
 
 
-# =============================== CREDIT ===============================
+# =============================== CREDIT (CASHIER) ===============================
 
 @transaction.atomic
 def create_credit_account(
@@ -286,6 +378,14 @@ def create_credit_account(
     due_date,
     approved_by: Employee,
 ) -> CreditAccount:
+    """
+    Cashier action — defers a PENDING receipt to a credit account.
+    """
+
+    if receipt.status not in {Receipt.PENDING, Receipt.OPEN}:
+        raise ValidationError(
+            f"Cannot create credit on a {receipt.status} receipt."
+        )
 
     credit = CreditAccount(
         receipt=receipt,
@@ -303,6 +403,59 @@ def create_credit_account(
     return credit
 
 
+# =============================== SETTLE CREDIT ===============================
+
+@transaction.atomic
+def settle_credit(
+    *,
+    credit_id: int,
+    amount: Decimal | float | str,
+    method: str,
+    settled_by: Employee,
+) -> Payment:
+    """
+    Cashier action — receives payment against an unsettled credit account.
+    Records a Payment against the original receipt.
+    Marks CreditAccount.is_settled = True when fully paid.
+    """
+
+    credit  = get_object_or_404(CreditAccount, pk=credit_id)
+    receipt = credit.receipt
+
+    if credit.is_settled:
+        raise ValidationError("This credit account is already settled.")
+
+    amount = Decimal(str(amount))
+    if amount <= 0:
+        raise ValidationError("Amount must be greater than zero.")
+
+    # Total already paid towards this receipt (could be partial payments before credit)
+    paid    = sum(p.amount for p in receipt.payments.all())
+    balance = receipt.total - paid
+
+    if amount > balance:
+        raise ValidationError("Amount exceeds outstanding credit balance.")
+
+    payment = Payment(
+        receipt=receipt,
+        amount=amount,
+        method=method,
+        received_by=settled_by,
+    )
+    payment.full_clean()
+    payment.save()
+
+    if amount == balance:
+        credit.is_settled  = True
+        credit.settled_by  = settled_by
+        credit.settled_at  = timezone.now()
+        credit.save(update_fields=["is_settled", "settled_by", "settled_at"])
+        receipt.status = Receipt.PAID
+        receipt.save(update_fields=["status"])
+
+    return payment
+
+
 # =============================== REFUNDS ===============================
 
 @transaction.atomic
@@ -318,9 +471,113 @@ def refund_receipt(
     if receipt.status not in {Receipt.PAID, Receipt.CREDIT}:
         raise ValidationError("Only paid or credit receipts can be refunded.")
 
-    receipt.status = Receipt.REFUNDED
+    receipt.status      = Receipt.REFUNDED
     receipt.refund_reason = reason
     receipt.refunded_by = refunded_by
     receipt.refunded_at = timezone.now()
     receipt.save()
     return receipt
+
+
+# =============================== MENU ===============================
+
+def sync_inventory_to_menu() -> list[MenuItem]:
+    """
+    Auto-creates MenuItem records for every inventory product with
+    auto_deduct_on_sale=True that has no existing MenuItem.
+    Idempotent — safe to call on every menu query.
+    """
+    products = InventoryProduct.objects.filter(
+        auto_deduct_on_sale=True,
+        menu_item__isnull=True,
+    )
+    created = []
+    for product in products:
+        item = MenuItem.objects.create(
+            name=product.name,
+            emoji="🛒",
+            price=Decimal("0.00"),
+            product=product,
+            is_available=True,
+            is_pinned=False,
+        )
+        created.append(item)
+    return created
+
+
+def create_menu_item(
+    *,
+    name: str,
+    emoji: str,
+    price: Decimal | float | str,
+    is_pinned: bool = False,
+    product_id: int | None = None,
+) -> MenuItem:
+
+    if product_id:
+        try:
+            product = InventoryProduct.objects.get(pk=product_id)
+            if hasattr(product, "menu_item"):
+                raise ValidationError("This product already has a menu item.")
+        except InventoryProduct.DoesNotExist:
+            raise ValidationError("Product not found.")
+    else:
+        product = None
+
+    item = MenuItem(
+        name=name,
+        emoji=emoji,
+        price=Decimal(str(price)),
+        is_pinned=is_pinned,
+        product=product,
+    )
+    item.full_clean()
+    item.save()
+    return item
+
+
+def update_menu_item(
+    *,
+    item_id: int,
+    name: str | None = None,
+    emoji: str | None = None,
+    price: Decimal | float | str | None = None,
+    is_pinned: bool | None = None,
+    is_available: bool | None = None,
+) -> MenuItem:
+    item = get_object_or_404(MenuItem, pk=item_id)
+    if name        is not None: item.name        = name
+    if emoji       is not None: item.emoji       = emoji
+    if price       is not None: item.price       = Decimal(str(price))
+    if is_pinned   is not None: item.is_pinned   = is_pinned
+    if is_available is not None: item.is_available = is_available
+    item.full_clean()
+    item.save()
+    return item
+
+
+def delete_menu_item(*, item_id: int) -> bool:
+    item = get_object_or_404(MenuItem, pk=item_id)
+    if item.product is not None:
+        raise ValidationError(
+            "Cannot delete an inventory-linked menu item. "
+            "Mark it unavailable instead."
+        )
+    item.delete()
+    return True
+
+
+def get_menu_with_frequency(limit: int = 8) -> list:
+    from django.db.models import Count
+    items = (
+        MenuItem.objects
+        .filter(is_available=True)
+        .annotate(
+            order_count=Count(
+                "product__pos_movements__receipt",
+                distinct=True,
+            )
+        )
+        .order_by("-is_pinned", "-order_count", "name")
+    )
+    return list(items)

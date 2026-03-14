@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import strawberry
 from strawberry.types import Info
+from asgiref.sync import sync_to_async
 
 from employees.types import EmployeeType
 
@@ -17,7 +18,23 @@ from .models import (
     Payment,
     CreditAccount,
     POSStockMovement,
+    MenuItem,
 )
+
+
+@strawberry.type
+class MenuItemType:
+    id: strawberry.ID
+    name: str
+    emoji: str
+    price: Decimal
+    is_available: bool
+    is_pinned: bool
+    product_id: Optional[strawberry.ID]
+
+    @strawberry.field
+    def has_inventory(self) -> bool:
+        return self.product_id is not None
 
 
 @strawberry.type
@@ -28,11 +45,13 @@ class POSSessionType:
     opening_cash: Decimal
     closing_cash: Optional[Decimal]
     is_active: bool
-    employee: EmployeeType
+
+    @strawberry.field
+    async def employee(self, info: Info) -> EmployeeType:
+        return await sync_to_async(lambda: self.employee)()
 
     @strawberry.field
     async def receipts(self, info: Info) -> List["ReceiptType"]:
-        # ── BUG FIX: was info.context["receipts_by_session"] — context uses attrs
         return await info.context.receipts_by_session.load(int(self.id))
 
 
@@ -44,9 +63,17 @@ class ReceiptType:
     discount: Decimal
     total: Decimal
     status: str
+    table_note: str
     created_at: datetime
-    session: POSSessionType
-    created_by: EmployeeType
+    submitted_at: Optional[datetime]
+
+    @strawberry.field
+    async def created_by(self, info: Info) -> EmployeeType:
+        return await sync_to_async(lambda: self.created_by)()
+
+    @strawberry.field
+    async def session(self, info: Info) -> POSSessionType:
+        return await sync_to_async(lambda: self.session)()
 
     @strawberry.field
     async def orders(self, info: Info) -> List["OrderType"]:
@@ -77,7 +104,10 @@ class OrderType:
     is_saved: bool
     is_refunded: bool
     created_at: datetime
-    created_by: EmployeeType
+
+    @strawberry.field
+    async def created_by(self, info: Info) -> EmployeeType:
+        return await sync_to_async(lambda: self.created_by)()
 
     @strawberry.field
     async def items(self, info: Info) -> List["OrderItemType"]:
@@ -94,8 +124,11 @@ class OrderItemType:
     final_price: Decimal
     price_overridden: bool
     price_override_reason: Optional[str]
-    price_override_by: Optional[EmployeeType]
     line_total: Decimal
+
+    @strawberry.field
+    async def price_override_by(self, info: Info) -> Optional[EmployeeType]:
+        return await sync_to_async(lambda: self.price_override_by)()
 
     @strawberry.field
     def effective_price(self) -> Decimal:
@@ -108,7 +141,10 @@ class PaymentType:
     method: str
     amount: Decimal
     created_at: datetime
-    received_by: EmployeeType
+
+    @strawberry.field
+    async def received_by(self, info: Info) -> EmployeeType:
+        return await sync_to_async(lambda: self.received_by)()
 
 
 @strawberry.type
@@ -119,7 +155,15 @@ class CreditAccountType:
     credit_amount: Decimal
     due_date: date
     is_settled: bool
-    approved_by: EmployeeType
+    settled_at: Optional[datetime]
+
+    @strawberry.field
+    async def approved_by(self, info: Info) -> EmployeeType:
+        return await sync_to_async(lambda: self.approved_by)()
+
+    @strawberry.field
+    async def settled_by(self, info: Info) -> Optional[EmployeeType]:
+        return await sync_to_async(lambda: self.settled_by)()
 
 
 @strawberry.type

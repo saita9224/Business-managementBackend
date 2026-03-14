@@ -1,53 +1,42 @@
-# pos/permissions.py
+# POS/permissions.py
 
 """
 POS permissions.
-These are auto-loaded by employees/permission_loader.py
-into the Permission table.
+Auto-loaded by employees/permission_loader.py into the Permission table.
 """
 
 PERMISSIONS = {
 
-    # ===============================
-    # POS SESSION
-    # ===============================
+    # ── Session ───────────────────────────────────────────
     "pos.open_session",
     "pos.close_session",
 
-    # ===============================
-    # ORDER & RECEIPT
-    # ===============================
-    "pos.create_order",          # Create / save order
-    "pos.merge_orders",          # Merge multiple orders under one receipt
-    "pos.view_orders",           # View past orders / receipts
+    # ── Waiter: order & receipt ───────────────────────────
+    "pos.create_order",       # Build cart, submit order (waiter)
+    "pos.recall_order",       # Recall & edit own PENDING receipt
+    "pos.merge_orders",       # Merge multiple orders under one receipt
+    "pos.view_orders",        # View own past orders / receipts
 
-    # ===============================
-    # PAYMENTS
-    # ===============================
-    "pos.accept_payment",        # Cash / Mpesa / Card
-    "pos.partial_payment",       # Allow partial payments
-    "pos.view_payments",
+    # ── Cashier: payment ──────────────────────────────────
+    "pos.view_cashier",       # Access the cashier queue (PENDING receipts)
+    "pos.accept_payment",     # Record CASH / MPESA / CARD payment
+    "pos.partial_payment",    # Allow partial payments
+    "pos.view_payments",      # View payment history
 
-    # ===============================
-    # CREDIT
-    # ===============================
-    "pos.create_credit",         # Allow order to go on credit
-    "pos.approve_credit",        # Manager-level approval
-    "pos.settle_credit",         # Receive credit payment
+    # ── Credit ────────────────────────────────────────────
+    "pos.create_credit",      # Mark receipt as credit (cashier)
+    "pos.approve_credit",     # Manager-level credit approval
+    "pos.settle_credit",      # Receive payment on a credit account
 
-    # ===============================
-    # PRICE OVERRIDE
-    # ===============================
-    "pos.override_price",        # Override item price (manager approval)
+    # ── Price override ────────────────────────────────────
+    "pos.override_price",     # Override item price
 
-    # ===============================
-    # REFUNDS
-    # ===============================
-    "pos.refund_order",          # Refund saved/paid orders (manager only)
+    # ── Refunds ───────────────────────────────────────────
+    "pos.refund_order",       # Refund paid / credit receipt (manager)
 
-    # ===============================
-    # STOCK EMISSION
-    # ===============================
-    "pos.emit_stock",            # Reduce inventory on save order
+    # ── Stock emission ────────────────────────────────────
+    "pos.emit_stock",         # Reduce inventory when order is submitted
 
+    # ── Menu management ───────────────────────────────────
+    "pos.manage_menu",        # Add / edit / delete menu items
 }

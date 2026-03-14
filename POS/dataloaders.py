@@ -4,7 +4,6 @@ from asgiref.sync import sync_to_async
 from strawberry.dataloader import DataLoader
 
 from .models import (
-    POSSession,
     Receipt,
     Order,
     OrderItem,
@@ -13,14 +12,21 @@ from .models import (
     POSStockMovement,
 )
 
+
 # ======================================================
 # RECEIPTS BY SESSION
 # ======================================================
+
 async def load_receipts_by_session(keys: list[int]):
     receipts = await sync_to_async(list)(
         Receipt.objects
         .filter(session_id__in=keys)
-        .select_related("session", "created_by")
+        .select_related(
+            "session",
+            "session__employee",
+            "created_by",
+            "refunded_by",
+        )
         .order_by("-created_at")
     )
 
@@ -34,6 +40,7 @@ async def load_receipts_by_session(keys: list[int]):
 # ======================================================
 # ORDERS BY RECEIPT
 # ======================================================
+
 async def load_orders_by_receipt(keys: list[int]):
     orders = await sync_to_async(list)(
         Order.objects
@@ -52,11 +59,12 @@ async def load_orders_by_receipt(keys: list[int]):
 # ======================================================
 # ITEMS BY ORDER
 # ======================================================
+
 async def load_items_by_order(keys: list[int]):
     items = await sync_to_async(list)(
         OrderItem.objects
         .filter(order_id__in=keys)
-        .select_related("price_override_by")
+        .select_related("sold_by", "price_override_by", "price_list")
     )
 
     grouped = {}
@@ -69,6 +77,7 @@ async def load_items_by_order(keys: list[int]):
 # ======================================================
 # PAYMENTS BY RECEIPT
 # ======================================================
+
 async def load_payments_by_receipt(keys: list[int]):
     payments = await sync_to_async(list)(
         Payment.objects
@@ -87,6 +96,7 @@ async def load_payments_by_receipt(keys: list[int]):
 # ======================================================
 # CREDIT BY RECEIPT (ONE-TO-ONE)
 # ======================================================
+
 async def load_credit_by_receipt(keys: list[int]):
     credits = await sync_to_async(list)(
         CreditAccount.objects
@@ -99,12 +109,14 @@ async def load_credit_by_receipt(keys: list[int]):
 
 
 # ======================================================
-# STOCK EMISSIONS BY RECEIPT (AUDIT ONLY)
+# STOCK EMISSIONS BY RECEIPT
 # ======================================================
+
 async def load_stock_by_receipt(keys: list[int]):
     movements = await sync_to_async(list)(
         POSStockMovement.objects
         .filter(receipt_id__in=keys)
+        .select_related("product", "performed_by")
         .order_by("created_at")
     )
 
@@ -118,12 +130,13 @@ async def load_stock_by_receipt(keys: list[int]):
 # ======================================================
 # LOADER FACTORY (REQUEST SCOPED)
 # ======================================================
+
 def create_pos_dataloaders():
     return {
         "receipts_by_session": DataLoader(load_receipts_by_session),
-        "orders_by_receipt": DataLoader(load_orders_by_receipt),
-        "items_by_order": DataLoader(load_items_by_order),
+        "orders_by_receipt":   DataLoader(load_orders_by_receipt),
+        "items_by_order":      DataLoader(load_items_by_order),
         "payments_by_receipt": DataLoader(load_payments_by_receipt),
-        "credit_by_receipt": DataLoader(load_credit_by_receipt),
-        "stock_by_receipt": DataLoader(load_stock_by_receipt),
+        "credit_by_receipt":   DataLoader(load_credit_by_receipt),
+        "stock_by_receipt":    DataLoader(load_stock_by_receipt),
     }
