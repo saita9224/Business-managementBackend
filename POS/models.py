@@ -38,11 +38,11 @@ class POSSession(models.Model):
         on_delete=models.PROTECT,
         related_name="pos_sessions"
     )
-    opened_at = models.DateTimeField(auto_now_add=True)
-    closed_at = models.DateTimeField(null=True, blank=True)
+    opened_at    = models.DateTimeField(auto_now_add=True)
+    closed_at    = models.DateTimeField(null=True, blank=True)
     opening_cash = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     closing_cash = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
-    is_active = models.BooleanField(default=True)
+    is_active    = models.BooleanField(default=True)
 
     def __str__(self):
         return f"Session {self.id} - {self.employee.name}"
@@ -50,13 +50,12 @@ class POSSession(models.Model):
 
 class Receipt(models.Model):
 
-    # ── Status constants ──────────────────────────────────
-    DRAFT    = "DRAFT"      # created, items being added, not yet submitted
-    PENDING  = "PENDING"    # submitted by waiter, awaiting cashier payment
-    OPEN     = "OPEN"       # partially paid
-    PAID     = "PAID"       # fully paid
-    CREDIT   = "CREDIT"     # deferred to credit account
-    REFUNDED = "REFUNDED"   # refunded
+    DRAFT    = "DRAFT"
+    PENDING  = "PENDING"
+    OPEN     = "OPEN"
+    PAID     = "PAID"
+    CREDIT   = "CREDIT"
+    REFUNDED = "REFUNDED"
 
     STATUS_CHOICES = [
         (DRAFT,    "Draft"),
@@ -82,25 +81,18 @@ class Receipt(models.Model):
     discount     = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total        = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     status       = models.CharField(max_length=20, choices=STATUS_CHOICES, default=DRAFT)
-
-    # ── Waiter annotation (optional free-text, e.g. "Window seat") ──
     table_note   = models.CharField(max_length=100, blank=True, default="")
-
-    # ── Submission timestamp (set when waiter hits "Send Order") ──
     submitted_at = models.DateTimeField(null=True, blank=True)
 
-    # ── Refund fields ─────────────────────────────────────
     refund_reason = models.TextField(blank=True, null=True)
     refunded_by   = models.ForeignKey(
         Employee,
-        null=True,
-        blank=True,
+        null=True, blank=True,
         on_delete=models.SET_NULL,
         related_name="refunded_receipts"
     )
     refunded_at = models.DateTimeField(null=True, blank=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.receipt_number
@@ -112,7 +104,7 @@ class Order(models.Model):
         on_delete=models.CASCADE,
         related_name="orders"
     )
-    created_by = models.ForeignKey(
+    created_by  = models.ForeignKey(
         Employee,
         on_delete=models.PROTECT,
         related_name="orders"
@@ -131,6 +123,8 @@ class OrderItem(models.Model):
         on_delete=models.CASCADE,
         related_name="items"
     )
+    # product_id = 0 is used as a sentinel for manual menu items
+    # that have no inventory product linked.
     product_id   = models.IntegerField()
     product_name = models.CharField(max_length=150)
     price_list   = models.ForeignKey(PriceList, on_delete=models.PROTECT)
@@ -154,6 +148,16 @@ class OrderItem(models.Model):
         on_delete=models.PROTECT,
         null=True, blank=True,
         related_name="sold_items"
+    )
+
+    # Optional link to the MenuItem that originated this item.
+    # Set for both inventory-linked and manual menu items.
+    # Null only for legacy items created before MenuItem existed.
+    menu_item = models.ForeignKey(
+        "MenuItem",
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="order_items",
     )
 
     def __str__(self):
@@ -198,8 +202,6 @@ class CreditAccount(models.Model):
         related_name="approved_credits"
     )
     is_settled = models.BooleanField(default=False)
-
-    # ── Settlement tracking ───────────────────────────────
     settled_by = models.ForeignKey(
         Employee,
         null=True, blank=True,
@@ -224,12 +226,9 @@ class POSStockMovement(models.Model):
         related_name="pos_movements"
     )
     quantity                = models.DecimalField(max_digits=10, decimal_places=2)
-    deducted_from_inventory = models.BooleanField(
-        default=False,
-        help_text="True if inventory.StockMovement was successfully written"
-    )
-    notes        = models.TextField(blank=True, null=True)
-    performed_by = models.ForeignKey(
+    deducted_from_inventory = models.BooleanField(default=False)
+    notes                   = models.TextField(blank=True, null=True)
+    performed_by            = models.ForeignKey(
         Employee,
         on_delete=models.SET_NULL,
         null=True, blank=True,
@@ -244,10 +243,8 @@ class POSStockMovement(models.Model):
 class MenuItem(models.Model):
     """
     Represents an item on the business menu.
-
     - Inventory-linked (product set): stock IS deducted on sale.
     - Manual (product None): no inventory linkage, no stock deduction.
-
     is_pinned=True items always appear first in the frequent items row.
     """
     name         = models.CharField(max_length=150)
