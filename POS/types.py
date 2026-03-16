@@ -23,6 +23,13 @@ from .models import (
 
 
 @strawberry.type
+class UnpricedProductType:
+    product_id:   strawberry.ID
+    product_name: str
+    unit:         str
+
+
+@strawberry.type
 class MenuItemType:
     id: strawberry.ID
     name: str

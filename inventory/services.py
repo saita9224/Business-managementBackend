@@ -42,10 +42,10 @@ def add_stock(
     quantity: float,
     reason: str,
     performed_by,
-    expense_item_id: int | None = None,
+    expense_item_id:    int | None = None,
     funded_by_business: bool = True,
-    group_id: str | None = None,
-    notes: str | None = None,
+    group_id:           str | None = None,
+    notes:              str | None = None,
 ) -> StockMovement:
 
     _validate_quantity(quantity)
@@ -98,12 +98,12 @@ def add_stock(
 @transaction.atomic
 def remove_stock(
     *,
-    product: Product,
+    product:  Product,
     quantity: float,
-    reason: str,
+    reason:   str,
     performed_by,
     group_id: str | None = None,
-    notes: str | None = None,
+    notes:    str | None = None,
 ) -> StockMovement:
 
     _validate_quantity(quantity)
@@ -137,17 +137,14 @@ def remove_stock(
 
 
 # ======================================================
-# ADD STOCK FROM EXPENSE — ATOMIC (matched product flow)
-# Links an existing expense to an existing product.
-# Stock movement and expense link written in one transaction.
-# If anything fails, nothing is saved.
+# ADD STOCK FROM EXPENSE — ATOMIC
 # ======================================================
 
 @transaction.atomic
 def add_stock_from_expense(
     *,
-    product_id: int,
-    quantity: float,
+    product_id:      int,
+    quantity:        float,
     expense_item_id: int,
     performed_by,
 ) -> StockMovement:
@@ -182,21 +179,24 @@ def add_stock_from_expense(
 
 
 # ======================================================
-# CREATE PRODUCT WITH INITIAL STOCK — ATOMIC (new product flow)
-# Creates product + stock movement in one transaction.
-# If either step fails everything rolls back —
-# no orphaned products, no unlinked stock movements.
+# CREATE PRODUCT WITH INITIAL STOCK — ATOMIC
+#
+# auto_deduct_on_sale defaults to False — staff must
+# explicitly opt in for products sold through POS.
+# Raw ingredients, cooking supplies etc. should be False.
+# Directly sold items (water, snacks etc.) should be True.
 # ======================================================
 
 @transaction.atomic
 def create_product_with_stock(
     *,
-    name: str,
-    unit: str,
-    category: str | None,
-    quantity: float,
-    expense_item_id: int,
+    name:                str,
+    unit:                str,
+    category:            str | None,
+    quantity:            float,
+    expense_item_id:     int,
     performed_by,
+    auto_deduct_on_sale: bool = False,
 ) -> dict:
 
     from expenses.models import ExpenseItem
@@ -218,9 +218,10 @@ def create_product_with_stock(
     product, created = Product.objects.get_or_create(
         name__iexact=name,
         defaults={
-            "name": name,
-            "unit": unit,
-            "category": category,
+            "name":                name,
+            "unit":                unit,
+            "category":            category,
+            "auto_deduct_on_sale": auto_deduct_on_sale,
         },
     )
 
@@ -243,6 +244,38 @@ def create_product_with_stock(
 
 
 # ======================================================
+# CREATE PRODUCT STANDALONE (no stock)
+#
+# auto_deduct_on_sale defaults to False.
+# ======================================================
+
+def create_product(
+    *,
+    name:                str,
+    unit:                str,
+    category:            str | None = None,
+    auto_deduct_on_sale: bool = False,
+) -> tuple[Product, bool]:
+    """
+    Creates a product with no initial stock.
+    Returns (product, created) tuple.
+    """
+    name = (name or "").strip()
+    if not name:
+        raise ValidationError("Product name is required")
+
+    return Product.objects.get_or_create(
+        name__iexact=name,
+        defaults={
+            "name":                name,
+            "unit":                unit,
+            "category":            category,
+            "auto_deduct_on_sale": auto_deduct_on_sale,
+        },
+    )
+
+
+# ======================================================
 # APPROVE RECONCILIATION
 # ======================================================
 
@@ -258,7 +291,7 @@ def approve_reconciliation(
 
     _validate_user(approved_by, "approved_by")
 
-    reconciliation.status = StockReconciliation.APPROVED
+    reconciliation.status      = StockReconciliation.APPROVED
     reconciliation.approved_by = approved_by
     reconciliation.approved_at = timezone.now()
     reconciliation.save(update_fields=["status", "approved_by", "approved_at"])
@@ -301,29 +334,25 @@ def reject_reconciliation(
 
     _validate_user(approved_by, "approved_by")
 
-    reconciliation.status = StockReconciliation.REJECTED
+    reconciliation.status      = StockReconciliation.REJECTED
     reconciliation.approved_by = approved_by
     reconciliation.approved_at = timezone.now()
-    reconciliation.notes = notes
+    reconciliation.notes       = notes
     reconciliation.save(update_fields=[
         "status", "approved_by", "approved_at", "notes",
     ])
 
     return reconciliation
 
-# ADD to bottom of inventory/services.py
 
 # ======================================================
 # SUBMIT STOCK RECONCILIATION (BULK)
-# Accepts a list of {product_id, counted_quantity} pairs.
-# Fetches current system stock for each, computes difference,
-# and bulk-creates StockReconciliation records as PENDING.
 # ======================================================
 
 @transaction.atomic
 def submit_reconciliation(
     *,
-    counts: list[dict],   # [{"product_id": int, "counted_quantity": float}]
+    counts: list[dict],
     counted_by,
 ) -> list[StockReconciliation]:
 
@@ -332,7 +361,7 @@ def submit_reconciliation(
     if not counts:
         raise ValidationError("No counts provided")
 
-    product_ids = [c["product_id"] for c in counts]
+    product_ids  = [c["product_id"] for c in counts]
     products_map = {
         p.id: p
         for p in Product.objects.filter(pk__in=product_ids)
@@ -340,7 +369,7 @@ def submit_reconciliation(
 
     reconciliations = []
     for entry in counts:
-        pid = entry["product_id"]
+        pid         = entry["product_id"]
         counted_qty = entry["counted_quantity"]
 
         if counted_qty < 0:

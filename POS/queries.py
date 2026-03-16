@@ -1,7 +1,7 @@
 # POS/queries.py
 
+from decimal import Decimal
 from typing import List, Optional
-from datetime import date
 
 import strawberry
 from strawberry.types import Info
@@ -10,10 +10,15 @@ from asgiref.sync import sync_to_async
 from employees.decorators import permission_required
 
 from .models import POSSession, Receipt, MenuItem, CreditAccount
-from .services import sync_inventory_to_menu, get_menu_with_frequency
-from .types import POSSessionType, ReceiptType, MenuItemType, CreditAccountType
+from .services import get_menu_with_frequency
+from .types import (
+    POSSessionType,
+    ReceiptType,
+    MenuItemType,
+    CreditAccountType,
+    UnpricedProductType,
+)
 
-# ── shared select_related chain used everywhere ──────────
 RECEIPT_SELECT = [
     "session",
     "session__employee",
@@ -86,7 +91,6 @@ class POSQuery:
     async def receipts_by_session(
         self, info: Info, session_id: strawberry.ID
     ) -> List[ReceiptType]:
-        """Waiter's own receipts for the current session."""
         def fetch():
             return list(
                 Receipt.objects
@@ -101,10 +105,6 @@ class POSQuery:
     async def my_pending_receipts(
         self, info: Info, session_id: strawberry.ID
     ) -> List[ReceiptType]:
-        """
-        Waiter — returns their own DRAFT and PENDING receipts in the
-        current session so they can recall and modify them.
-        """
         user = info.context.user
         def fetch():
             return list(
@@ -139,8 +139,7 @@ class POSQuery:
             return list(qs[offset: offset + limit])
         return await sync_to_async(fetch)()
 
-    # ── CASHIER QUEUE ────────────────────────────────────
-    # Requires pos.view_cashier — only cashiers/managers see this.
+    # ── CASHIER QUEUE ─────────────────────────────────────
 
     @strawberry.field
     @permission_required("pos.view_cashier")
@@ -149,10 +148,6 @@ class POSQuery:
         info: Info,
         session_id: Optional[strawberry.ID] = None,
     ) -> List[ReceiptType]:
-        """
-        Returns all PENDING receipts ordered by submitted_at ascending
-        (oldest order served first). Optionally filtered to a session.
-        """
         def fetch():
             qs = (
                 Receipt.objects
@@ -172,9 +167,6 @@ class POSQuery:
         info: Info,
         session_id: Optional[strawberry.ID] = None,
     ) -> List[ReceiptType]:
-        """
-        Returns all OPEN (partially paid) receipts for the cashier.
-        """
         def fetch():
             qs = (
                 Receipt.objects
@@ -187,7 +179,7 @@ class POSQuery:
             return list(qs)
         return await sync_to_async(fetch)()
 
-    # ── CREDIT ACCOUNTS ──────────────────────────────────
+    # ── CREDIT ACCOUNTS ───────────────────────────────────
 
     @strawberry.field
     @permission_required("pos.settle_credit")
@@ -196,11 +188,6 @@ class POSQuery:
         info: Info,
         overdue_only: bool = False,
     ) -> List[CreditAccountType]:
-        """
-        Returns all unsettled credit accounts.
-        Pass overdue_only=true to see only those past their due date.
-        Used by cashier/manager when a customer comes to settle a credit.
-        """
         def fetch():
             qs = (
                 CreditAccount.objects
@@ -226,7 +213,6 @@ class POSQuery:
         info: Info,
         receipt_id: strawberry.ID,
     ) -> Optional[CreditAccountType]:
-        """Fetch the credit account for a specific receipt."""
         def fetch():
             return (
                 CreditAccount.objects
@@ -237,19 +223,26 @@ class POSQuery:
         return await sync_to_async(fetch)()
 
     # ── MENU ─────────────────────────────────────────────
+    # sync_inventory_to_menu removed — items are now explicitly
+    # priced and added by staff via the Menu Manager.
 
     @strawberry.field
     @permission_required("pos.view_orders")
     async def menu_items(self, info: Info) -> List[MenuItemType]:
-        """Available items + auto-sync inventory products."""
-        await sync_to_async(sync_inventory_to_menu)()
+        """
+        All available menu items ordered by pin status then frequency.
+        Only returns items with price > 0 so zero-priced inventory
+        items don't appear on the waiter's menu until priced.
+        """
         return await sync_to_async(get_menu_with_frequency)()
 
     @strawberry.field
     @permission_required("pos.view_orders")
     async def all_menu_items(self, info: Info) -> List[MenuItemType]:
-        """All items including unavailable — for Menu Manager."""
-        await sync_to_async(sync_inventory_to_menu)()
+        """
+        All menu items including unavailable ones — for the Menu Manager.
+        Includes zero-priced items so staff can see and price them.
+        """
         def fetch():
             return list(
                 MenuItem.objects
@@ -257,3 +250,55 @@ class POSQuery:
                 .order_by("-is_pinned", "name")
             )
         return await sync_to_async(fetch)()
+
+    # ── UNPRICED INVENTORY ITEMS ──────────────────────────
+
+    @strawberry.field
+    @permission_required("pos.manage_menu")
+    async def unpriced_inventory_items(
+        self, info: Info
+    ) -> List[UnpricedProductType]:
+        """
+        Returns inventory products with auto_deduct_on_sale=True that
+        either have no MenuItem yet, or have a MenuItem with price=0.
+        Shown in Menu Manager so staff can set prices before items
+        appear on the waiter's menu.
+        """
+        def fetch():
+            from inventory.models import Product as InvProduct
+
+            # Products with no MenuItem at all
+            no_menu = list(
+                InvProduct.objects
+                .filter(auto_deduct_on_sale=True, menu_item__isnull=True)
+                .values("id", "name", "unit")
+            )
+
+            # Products with a MenuItem but still priced at 0
+            zero_price = list(
+                InvProduct.objects
+                .filter(
+                    auto_deduct_on_sale=True,
+                    menu_item__price=Decimal("0.00"),
+                )
+                .values("id", "name", "unit")
+            )
+
+            # Merge and deduplicate
+            seen, results = set(), []
+            for p in no_menu + zero_price:
+                if p["id"] not in seen:
+                    seen.add(p["id"])
+                    results.append(p)
+            return results
+
+        products = await sync_to_async(fetch)()
+
+        return [
+            UnpricedProductType(
+                product_id=str(p["id"]),
+                product_name=p["name"],
+                unit=p["unit"] or "",
+            )
+            for p in products
+        ]

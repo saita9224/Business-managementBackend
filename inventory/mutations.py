@@ -12,13 +12,14 @@ from employees.decorators import permission_required
 from .models import Product, StockReconciliation
 from .queries import wrap_product
 from .services import (
-    add_stock as add_stock_service,
-    add_stock_from_expense as add_stock_from_expense_service,
-    remove_stock as remove_stock_service,
-    create_product_with_stock as create_product_with_stock_service,
-    submit_reconciliation as submit_reconciliation_service,
-    approve_reconciliation as approve_reconciliation_service,
-    reject_reconciliation as reject_reconciliation_service,
+    add_stock                  as add_stock_service,
+    add_stock_from_expense     as add_stock_from_expense_service,
+    remove_stock               as remove_stock_service,
+    create_product             as create_product_service,
+    create_product_with_stock  as create_product_with_stock_service,
+    submit_reconciliation      as submit_reconciliation_service,
+    approve_reconciliation     as approve_reconciliation_service,
+    reject_reconciliation      as reject_reconciliation_service,
 )
 from .types import ProductType, StockMovementType, StockReconciliationType
 
@@ -29,49 +30,51 @@ from .types import ProductType, StockMovementType, StockReconciliationType
 
 @strawberry.input
 class CreateProductInput:
-    name: str
-    unit: str
-    category: Optional[str] = None
+    name:                str
+    unit:                str
+    category:            Optional[str] = None
+    auto_deduct_on_sale: bool = False
 
 
 @strawberry.input
 class CreateProductWithStockInput:
-    name: str
-    unit: str
-    category: Optional[str] = None
-    quantity: float
-    expense_item_id: strawberry.ID
+    name:                str
+    unit:                str
+    category:            Optional[str] = None
+    quantity:            float
+    expense_item_id:     strawberry.ID
+    auto_deduct_on_sale: bool = False
 
 
 @strawberry.input
 class AddStockFromExpenseInput:
-    product_id: strawberry.ID
-    quantity: float
+    product_id:      strawberry.ID
+    quantity:        float
     expense_item_id: strawberry.ID
 
 
 @strawberry.input
 class AddStockInput:
-    product_id: strawberry.ID
-    quantity: float
-    reason: str
+    product_id:         strawberry.ID
+    quantity:           float
+    reason:             str
     funded_by_business: bool
-    notes: Optional[str] = None
-    expense_item_id: Optional[strawberry.ID] = None
-    group_id: Optional[str] = None
+    notes:              Optional[str] = None
+    expense_item_id:    Optional[strawberry.ID] = None
+    group_id:           Optional[str] = None
 
 
 @strawberry.input
 class RemoveStockInput:
     product_id: strawberry.ID
-    quantity: float
-    reason: str
-    notes: Optional[str] = None
+    quantity:   float
+    reason:     str
+    notes:      Optional[str] = None
 
 
 @strawberry.input
 class StockCountEntryInput:
-    product_id: strawberry.ID
+    product_id:       strawberry.ID
     counted_quantity: float
 
 
@@ -94,22 +97,24 @@ class InventoryMutation:
     @permission_required("inventory.product.create")
     async def create_product(
         self,
-        info: Info,
+        info:  Info,
         input: CreateProductInput,
     ) -> ProductType:
 
-        def get_or_create():
-            product, _ = Product.objects.get_or_create(
-                name__iexact=input.name,
-                defaults={
-                    "name": input.name,
-                    "unit": input.unit,
-                    "category": input.category,
-                },
+        def run():
+            product, _ = create_product_service(
+                name=input.name,
+                unit=input.unit,
+                category=input.category,
+                auto_deduct_on_sale=input.auto_deduct_on_sale,
             )
             return product
 
-        product = await sync_to_async(get_or_create)()
+        try:
+            product = await sync_to_async(run)()
+        except Exception as e:
+            raise GraphQLError(str(e))
+
         stock = await info.context.current_stock_loader.load(product.id)
         return wrap_product(product, float(stock or 0))
 
@@ -121,7 +126,7 @@ class InventoryMutation:
     @permission_required("inventory.product.create")
     async def create_product_with_stock(
         self,
-        info: Info,
+        info:  Info,
         input: CreateProductWithStockInput,
     ) -> ProductType:
 
@@ -135,6 +140,7 @@ class InventoryMutation:
                 quantity=input.quantity,
                 expense_item_id=int(input.expense_item_id),
                 performed_by=employee,
+                auto_deduct_on_sale=input.auto_deduct_on_sale,
             )
 
         try:
@@ -143,7 +149,7 @@ class InventoryMutation:
             raise GraphQLError(str(e))
 
         product = result["product"]
-        stock = await info.context.current_stock_loader.load(product.id)
+        stock   = await info.context.current_stock_loader.load(product.id)
         return wrap_product(product, float(stock or 0))
 
 
@@ -154,7 +160,7 @@ class InventoryMutation:
     @permission_required("inventory.stock.in")
     async def add_stock_from_expense(
         self,
-        info: Info,
+        info:  Info,
         input: AddStockFromExpenseInput,
     ) -> StockMovementType:
 
@@ -178,7 +184,7 @@ class InventoryMutation:
     @permission_required("inventory.stock.in")
     async def add_stock(
         self,
-        info: Info,
+        info:  Info,
         input: AddStockInput,
     ) -> StockMovementType:
 
@@ -215,7 +221,7 @@ class InventoryMutation:
     @permission_required("inventory.stock.out")
     async def remove_stock(
         self,
-        info: Info,
+        info:  Info,
         input: RemoveStockInput,
     ) -> StockMovementType:
 
@@ -240,13 +246,12 @@ class InventoryMutation:
 
     # --------------------------------------------------------
     # SUBMIT STOCK RECONCILIATION (BULK)
-    # Creates PENDING reconciliation records for manager review.
     # --------------------------------------------------------
     @strawberry.mutation
     @permission_required("inventory.stock.adjust")
     async def submit_reconciliation(
         self,
-        info: Info,
+        info:  Info,
         input: SubmitReconciliationInput,
     ) -> List[StockReconciliationType]:
 
@@ -254,7 +259,7 @@ class InventoryMutation:
 
         counts = [
             {
-                "product_id": int(entry.product_id),
+                "product_id":       int(entry.product_id),
                 "counted_quantity": entry.counted_quantity,
             }
             for entry in input.counts
@@ -268,8 +273,7 @@ class InventoryMutation:
         except Exception as e:
             raise GraphQLError(str(e))
 
-        # Resolve current stock for each product after submission
-        product_ids = [r.product.id for r in reconciliations]
+        product_ids  = [r.product.id for r in reconciliations]
         stock_values = await info.context.current_stock_loader.load_many(product_ids)
 
         return [
@@ -290,14 +294,13 @@ class InventoryMutation:
 
     # --------------------------------------------------------
     # APPROVE RECONCILIATION
-    # Fires an ADJUSTMENT stock movement if difference != 0.
     # --------------------------------------------------------
     @strawberry.mutation
     @permission_required("inventory.stock.adjust")
     async def approve_reconciliation(
         self,
-        info: Info,
-        reconciliation_id: strawberry.ID,
+        info:               Info,
+        reconciliation_id:  strawberry.ID,
     ) -> StockReconciliationType:
 
         employee = info.context.user
@@ -309,7 +312,6 @@ class InventoryMutation:
                 ).get(pk=reconciliation_id)
             except StockReconciliation.DoesNotExist:
                 raise ValueError("Reconciliation not found")
-
             approve_reconciliation_service(
                 reconciliation=recon,
                 approved_by=employee,
@@ -344,9 +346,9 @@ class InventoryMutation:
     @permission_required("inventory.stock.adjust")
     async def reject_reconciliation(
         self,
-        info: Info,
+        info:              Info,
         reconciliation_id: strawberry.ID,
-        notes: Optional[str] = None,
+        notes:             Optional[str] = None,
     ) -> StockReconciliationType:
 
         employee = info.context.user
@@ -358,7 +360,6 @@ class InventoryMutation:
                 ).get(pk=reconciliation_id)
             except StockReconciliation.DoesNotExist:
                 raise ValueError("Reconciliation not found")
-
             reject_reconciliation_service(
                 reconciliation=recon,
                 approved_by=employee,
