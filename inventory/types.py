@@ -98,6 +98,7 @@ class ProductType:
     name: str
     category: Optional[str]
     unit: str
+    auto_deduct_on_sale: bool 
     created_at: datetime
 
     _current_stock: Private[float]

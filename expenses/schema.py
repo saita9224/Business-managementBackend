@@ -1,3 +1,5 @@
+# expenses/schema.py
+
 from .queries import ExpenseQuery
 from .mutations import ExpenseMutation
 from .dataloaders import create_expenses_dataloaders

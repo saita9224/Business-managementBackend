@@ -15,17 +15,34 @@ from .types import (
 from . import services
 
 
+# ======================================================
+# ONBOARD INPUT
+# ======================================================
+
+@strawberry.input
+class OnboardEmployeeInput:
+    name:             str
+    email:            str
+    password:         str
+    permission_codes: typing.List[str]
+    phone:            typing.Optional[str] = None
+
+
+# ======================================================
+# MUTATIONS
+# ======================================================
+
 @strawberry.type
 class EmployeeMutation:
 
-    # ---------- ROLE ----------
+    # ── ROLE ───────────────────────────────────────────
 
     @strawberry.mutation
     @permission_required("role.create")
     def create_role(
         self,
-        info: Info,
-        name: str,
+        info:        Info,
+        name:        str,
         description: typing.Optional[str] = None,
     ) -> RoleType:
         role = services.create_role(name, description)
@@ -35,9 +52,9 @@ class EmployeeMutation:
     @permission_required("role.update")
     def update_role(
         self,
-        info: Info,
-        id: int,
-        name: typing.Optional[str] = None,
+        info:        Info,
+        id:          int,
+        name:        typing.Optional[str] = None,
         description: typing.Optional[str] = None,
     ) -> RoleType:
         role = services.update_role(id, name=name, description=description)
@@ -48,14 +65,14 @@ class EmployeeMutation:
     def delete_role(self, info: Info, id: int) -> bool:
         return services.delete_role(id)
 
-    # ---------- PERMISSION ----------
+    # ── PERMISSION ─────────────────────────────────────
 
     @strawberry.mutation
     @permission_required("role.create")
     def create_permission(
         self,
-        info: Info,
-        code: str,
+        info:        Info,
+        code:        str,
         description: typing.Optional[str] = None,
     ) -> PermissionType:
         perm = services.create_permission(code, description)
@@ -65,9 +82,9 @@ class EmployeeMutation:
     @permission_required("role.update")
     def update_permission(
         self,
-        info: Info,
-        id: int,
-        name: typing.Optional[str] = None,
+        info:        Info,
+        id:          int,
+        name:        typing.Optional[str] = None,
         description: typing.Optional[str] = None,
     ) -> PermissionType:
         perm = services.update_permission(id, name=name, description=description)
@@ -78,14 +95,14 @@ class EmployeeMutation:
     def delete_permission(self, info: Info, id: int) -> bool:
         return services.delete_permission(id)
 
-    # ---------- ROLE ↔ PERMISSION ----------
+    # ── ROLE ↔ PERMISSION ──────────────────────────────
 
     @strawberry.mutation
     @permission_required("role.update")
     def assign_permission_to_role(
         self,
-        info: Info,
-        role_id: int,
+        info:          Info,
+        role_id:       int,
         permission_id: int,
     ) -> RolePermissionType:
         link = services.assign_permission_to_role(role_id, permission_id)
@@ -107,13 +124,13 @@ class EmployeeMutation:
     @permission_required("role.update")
     def remove_permission_from_role(
         self,
-        info: Info,
-        role_id: int,
+        info:          Info,
+        role_id:       int,
         permission_id: int,
     ) -> bool:
         return services.remove_permission_from_role(role_id, permission_id)
 
-    # ---------- EMPLOYEE ----------
+    # ── EMPLOYEE ───────────────────────────────────────
 
     @strawberry.mutation
     @permission_required("employee.create")
@@ -134,12 +151,12 @@ class EmployeeMutation:
     @permission_required("employee.update")
     def update_employee(
         self,
-        info: Info,
-        id: int,
-        name: typing.Optional[str] = None,
-        email: typing.Optional[str] = None,
-        phone: typing.Optional[str] = None,
-        password: typing.Optional[str] = None,
+        info:       Info,
+        id:         int,
+        name:       typing.Optional[str]       = None,
+        email:      typing.Optional[str]       = None,
+        phone:      typing.Optional[str]       = None,
+        password:   typing.Optional[str]       = None,
         role_names: typing.Optional[typing.List[str]] = None,
     ) -> EmployeeType:
         return services.update_employee(
@@ -155,3 +172,25 @@ class EmployeeMutation:
     @permission_required("employee.delete")
     def delete_employee(self, info: Info, id: int) -> bool:
         return services.delete_employee(id)
+
+    # ── ONBOARD EMPLOYEE — ATOMIC ──────────────────────
+
+    @strawberry.mutation
+    @permission_required("employee.create")
+    def onboard_employee(
+        self,
+        info: Info,
+        data: OnboardEmployeeInput,
+    ) -> EmployeeType:
+        """
+        Creates an employee and assigns permissions atomically
+        in a single transaction. Replaces the multi-call frontend
+        approach with one round trip and full rollback on failure.
+        """
+        return services.onboard_employee(
+            name=data.name,
+            email=data.email,
+            phone=data.phone,
+            password=data.password,
+            permission_codes=data.permission_codes,
+        )

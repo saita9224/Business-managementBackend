@@ -29,6 +29,7 @@ def wrap_product(product: Product, current_stock: float) -> ProductType:
         name=product.name,
         category=product.category,
         unit=product.unit,
+        auto_deduct_on_sale=product.auto_deduct_on_sale,
         created_at=product.created_at,
         _current_stock=current_stock,   # 👈 this was missing — causes the crash
     )

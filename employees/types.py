@@ -2,21 +2,22 @@
 
 import typing
 import strawberry
+from strawberry.types import Info
 
 from .models import Permission
 
 
 @strawberry.type
 class PermissionType:
-    id: strawberry.ID
-    name: str
+    id:          strawberry.ID
+    name:        str
     description: typing.Optional[str]
 
 
 @strawberry.type
 class RoleType:
-    id: strawberry.ID
-    name: str
+    id:          strawberry.ID
+    name:        str
     description: typing.Optional[str]
 
     @strawberry.field
@@ -30,10 +31,10 @@ class RoleType:
 
 @strawberry.type
 class EmployeeType:
-    id: strawberry.ID
-    name: str
-    email: str
-    phone: typing.Optional[str]
+    id:        strawberry.ID
+    name:      str
+    email:     str
+    phone:     typing.Optional[str]
     is_active: bool
 
     @strawberry.field(name="roles")
@@ -46,19 +47,19 @@ class EmployeeType:
 
 @strawberry.type
 class RolePermissionType:
-    id: strawberry.ID
-    role: RoleType
+    id:         strawberry.ID
+    role:       RoleType
     permission: PermissionType
 
 
-# ----------------------
+# ======================================================
 # INPUT TYPES
-# ----------------------
+# ======================================================
 
 @strawberry.input
 class EmployeeInput:
-    name: str
-    email: str
-    phone: typing.Optional[str] = None
-    password: str
+    name:       str
+    email:      str
+    phone:      typing.Optional[str] = None
+    password:   str
     role_names: typing.List[str]

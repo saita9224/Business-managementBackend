@@ -16,7 +16,6 @@ from employees.schema import EmployeeQuery, EmployeeMutation
 from expenses.schema import ExpenseQuery, ExpenseMutation
 from expenses.dataloaders import create_expenses_dataloaders
 
-
 # Inventory
 from inventory.schema import InventoryQuery, InventoryMutation
 from inventory.dataloaders import create_inventory_dataloaders
@@ -25,11 +24,14 @@ from inventory.dataloaders import create_inventory_dataloaders
 from POS.schema import POSQuery, POSMutation
 from POS.dataloaders import create_pos_dataloaders
 
+# HR
+from hr.schema import HRQuery, HRMutation
+from hr.dataloaders import create_hr_dataloaders
+
 # -------------------------------------------------
 # Middleware
 # -------------------------------------------------
 from .middleware import JWTMiddleware
-
 
 
 # -------------------------------------------------
@@ -42,10 +44,10 @@ class Query(
     ExpenseQuery,
     InventoryQuery,
     POSQuery,
+    HRQuery,
 ):
     """
     Root GraphQL Query.
-
     Composed from app-level query mixins.
     """
     pass
@@ -61,10 +63,10 @@ class Mutation(
     ExpenseMutation,
     InventoryMutation,
     POSMutation,
+    HRMutation,
 ):
     """
     Root GraphQL Mutation.
-
     Composed from app-level mutation mixins.
     """
     pass

@@ -1,35 +1,39 @@
 # employees/permissions.py
 
 """
-This file defines all permissions for the Employees app.
-permissions_loader.py will automatically load them into the DB
-during Django startup.
+Permissions for the Employees app.
+permissions_loader.py loads these into the DB on startup.
 """
 
-# -------------------------------
-# PERMISSIONS FOR THIS APP
-# -------------------------------
+from functools import lru_cache
+from .models import RolePermission
+
 
 PERMISSIONS = {
     "employee.view",
     "employee.create",
     "employee.update",
     "employee.delete",
+    "role.create",
+    "role.update",
+    "role.delete",
 }
 
-# -------------------------------
-# PERMISSION RESOLUTION ENGINE
-# -------------------------------
-from functools import lru_cache
-from .models import RolePermission
+PERMISSION_META = {
+    "employee.view":   ("View Employees",       "Can view the employee list and profiles"),
+    "employee.create": ("Create Employees",      "Can onboard new employees"),
+    "employee.update": ("Edit Employees",        "Can update employee details and roles"),
+    "employee.delete": ("Delete Employees",      "Can permanently remove an employee"),
+    "role.create":     ("Create Roles",          "Can create new roles and permission groups"),
+    "role.update":     ("Edit Roles",            "Can modify role permissions"),
+    "role.delete":     ("Delete Roles",          "Can delete roles from the system"),
+}
 
+
+# ── Permission resolution engine ──────────────────────
 
 @lru_cache(maxsize=100)
 def get_permissions_for_role(role_name: str) -> set:
-    """
-    Returns a set of permission codes (strings) assigned to a given role.
-    Uses caching to avoid repeated DB hits.
-    """
     perms = (
         RolePermission.objects
         .filter(role__name=role_name)
@@ -39,5 +43,4 @@ def get_permissions_for_role(role_name: str) -> set:
 
 
 def clear_permission_cache():
-    """Clears the permission cache after updates."""
     get_permissions_for_role.cache_clear()
