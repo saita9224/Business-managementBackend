@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'inventory',
     "POS",
     "hr",
+    "reports",
 ]
 
 MIDDLEWARE = [

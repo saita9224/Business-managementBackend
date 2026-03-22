@@ -1,50 +1,24 @@
 # reports/permissions.py
 
 """
-Reports permissions.
-
-These permissions control access to read-only analytical
-and reporting features across the system.
-
-They are auto-loaded by employees/permission_loader.py
-into the Permission table.
+Permissions for the Reports app.
+permissions_loader.py loads these into the DB on startup.
 """
 
 PERMISSIONS = {
+    "reports.view_sales",
+    "reports.view_expenses",
+    "reports.view_inventory",
+    "reports.view_payroll",
+    "reports.view_attendance",
+    "reports.view_credits",
+}
 
-    # ===============================
-    # SALES REPORTS
-    # ===============================
-    "reports.view_all_sales",      # View all sales (admin / manager)
-    "reports.view_own_sales",      # View own receipts only (cashier)
-
-    # ===============================
-    # SALES ANALYTICS (TRENDS)
-    # ===============================
-    "reports.view_sales_trends",   # Daily / monthly trends, charts
-
-    # ===============================
-    # STAFF PERFORMANCE
-    # ===============================
-    "reports.view_staff_sales",    # Per-staff sales summaries
-
-    # ===============================
-    # POS SESSION REPORTS
-    # ===============================
-    "reports.view_session_sales",  # Per-shift reconciliation
-
-    # ===============================
-    # INVENTORY REPORTS (FUTURE)
-    # ===============================
-    "reports.view_inventory_reports",
-
-    # ===============================
-    # EXPENSE REPORTS (FUTURE)
-    # ===============================
-    "reports.view_expense_reports",
-
-    # ===============================
-    # FINANCIAL / PROFIT REPORTS (FUTURE)
-    # ===============================
-    "reports.view_financial_reports",
+PERMISSION_META = {
+    "reports.view_sales":      ("Sales Reports",      "Can view sales summaries, trends and product performance"),
+    "reports.view_expenses":   ("Expense Reports",    "Can view expense summaries and supplier breakdowns"),
+    "reports.view_inventory":  ("Inventory Reports",  "Can view stock health and movement reports"),
+    "reports.view_payroll":    ("Payroll Reports",    "Can view salary summaries and payment status"),
+    "reports.view_attendance": ("Attendance Reports", "Can view employee attendance summaries"),
+    "reports.view_credits":    ("Credit Reports",     "Can view credit exposure and overdue accounts"),
 }
