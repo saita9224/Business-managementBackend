@@ -131,3 +131,40 @@ class EmployeeRole(models.Model):
 
     def __str__(self):
         return f"{self.employee.email} → {self.role.name}"
+    
+
+class SocialAccount(models.Model):
+    """
+    Links an OAuth provider identity to an Employee.
+    Stored in each tenant's schema alongside the Employee.
+    One Employee can have multiple social accounts
+    (e.g. linked Google + Facebook).
+    """
+
+    PROVIDER_GOOGLE   = "google"
+    PROVIDER_FACEBOOK = "facebook"
+    PROVIDER_CHOICES  = [
+        (PROVIDER_GOOGLE,   "Google"),
+        (PROVIDER_FACEBOOK, "Facebook"),
+    ]
+
+    employee    = models.ForeignKey(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="social_accounts",
+    )
+    provider    = models.CharField(max_length=20, choices=PROVIDER_CHOICES)
+    provider_id = models.CharField(max_length=255)  # Google sub / Facebook id
+    email       = models.EmailField()
+    name        = models.CharField(max_length=150, blank=True)
+    picture_url = models.URLField(blank=True, null=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("provider", "provider_id")
+        indexes = [
+            models.Index(fields=["provider", "provider_id"]),
+        ]
+
+    def __str__(self):
+        return f"{self.provider}:{self.provider_id} → {self.employee.email}"

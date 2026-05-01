@@ -1,4 +1,4 @@
-# employees/apps.py
+# employees/apps.py  
 from django.apps import AppConfig
 
 class EmployeesConfig(AppConfig):
@@ -6,10 +6,6 @@ class EmployeesConfig(AppConfig):
     name = 'employees'
 
     def ready(self):
-        from .permissions_loader import load_permissions
-        from django.db.utils import OperationalError, ProgrammingError
-
-        try:
-            load_permissions()
-        except (OperationalError, ProgrammingError):
-            pass
+        # Do NOT call load_permissions() here.
+        # Run: python manage.py sync_permissions --all-tenants
+        pass
