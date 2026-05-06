@@ -113,9 +113,10 @@ MIDDLEWARE = [
 # django-tenants routes requests based on whether the
 # incoming host matches a tenant domain or the public schema.
 #
-# ROOT_URLCONF        → used for all authenticated tenant requests
-# PUBLIC_SCHEMA_URLCONF → used when the request hits the public schema
-#                         (e.g. bare localhost, your SaaS landing/signup)
+# ROOT_URLCONF          → used for all tenant requests
+# PUBLIC_SCHEMA_URLCONF → used when the request hits the
+#                         public schema (bare localhost,
+#                         Google auth, SaaS landing)
 ROOT_URLCONF = 'backend.urls'
 PUBLIC_SCHEMA_URLCONF = 'backend.public_urls'
 
@@ -127,6 +128,7 @@ TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
         'DIRS': [],
+        'APP_ATTRS': True,
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -150,7 +152,7 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # checkout. Everything else stays the same as before.
 DATABASES = {
     'default': {
-        'ENGINE': 'django_tenants.postgresql_backend',  # ← replaces django.db.backends.postgresql
+        'ENGINE': 'django_tenants.postgresql_backend',
         'NAME': 'business_management',
         'USER': 'postgres',
         'PASSWORD': 'Uabatias',
@@ -201,8 +203,22 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 
 # ======================================================
-# JWT (optional — kept here so services.py can read them
-# from settings rather than hardcoding)
+# JWT
 # ======================================================
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_EXPIRES_SECONDS = 3600  # 1 hour
+
+
+# ======================================================
+# GOOGLE OAUTH
+# ======================================================
+# Web client ID from Google Cloud Console.
+# APIs & Services → Credentials → OAuth 2.0 Client IDs
+# → "Hoppers Backend" (Web application type).
+#
+# Django uses this to verify the id_token sent by the
+# mobile app. The token's 'aud' field must match this value.
+#
+# The Android client ID (used only by the mobile app)
+# is NOT stored here — it lives in the React Native project.
+GOOGLE_CLIENT_ID = "536023790932-enm7mluq01p6qh5obncdl8jibtvpd6i9.apps.googleusercontent.com"
