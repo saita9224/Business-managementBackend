@@ -1,14 +1,15 @@
 # authentication/services.py
 
 """
-JWT creation and decoding, plus all business logic that was
-previously in social_mutations.py:
+JWT creation and decoding, plus all business logic:
 
   - find_existing_google_user()
   - create_new_tenant_and_admin()
+  - find_employee_by_email()
   - build_auth_payload()
-
-Mutations stay thin — they call these services and return results.
+  - create_pending_registration()
+  - verify_pending_registration()
+  - complete_pending_registration()
 """
 
 import re
@@ -24,30 +25,30 @@ from django_tenants.utils import schema_context
 
 logger = logging.getLogger(__name__)
 
-JWT_SECRET = getattr(settings, "JWT_SECRET", settings.SECRET_KEY)
-ALGORITHM  = getattr(settings, "JWT_ALGORITHM", "HS256")
+JWT_SECRET           = getattr(settings, "JWT_SECRET", settings.SECRET_KEY)
+ALGORITHM            = getattr(settings, "JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRES = getattr(settings, "JWT_ACCESS_EXPIRES_SECONDS", 3600)
 
 
 # ======================================================
-# JWT — schema_name is embedded so every token is
-# self-contained and tenant-aware on decode.
+# JWT
 # ======================================================
 
-def create_jwt_token(employee, schema_name: str, expires_in: int = ACCESS_TOKEN_EXPIRES) -> str:
+def create_jwt_token(
+    employee,
+    schema_name: str,
+    expires_in: int = ACCESS_TOKEN_EXPIRES,
+) -> str:
     """
-    Create a signed JWT for an authenticated employee.
-
-    schema_name is embedded in the payload so decode_jwt_token
+    Create a signed JWT. schema_name is embedded so decode_jwt_token
     can activate the correct tenant schema without needing the
-    subdomain from the request (important for mobile clients
-    that may call the public endpoint with a stored token).
+    request subdomain — critical for mobile clients with stored tokens.
     """
     now = timezone.now()
 
     payload = {
         "user_id":     employee.id,
-        "schema_name": schema_name,   # ← tenant context baked into token
+        "schema_name": schema_name,
         "iat":         int(now.timestamp()),
         "exp":         int((now + timedelta(seconds=expires_in)).timestamp()),
     }
@@ -62,11 +63,10 @@ def create_jwt_token(employee, schema_name: str, expires_in: int = ACCESS_TOKEN_
 
 async def decode_jwt_token(token: str):
     """
-    Decode a JWT and return the matching Employee, or None on any failure.
+    Decode a JWT and return the matching Employee, or None on failure.
 
-    Uses schema_name from the token payload to activate the correct
-    tenant schema before querying — this makes the login mutation and
-    JWTMiddleware fully multi-tenant aware regardless of which subdomain
+    Activates schema_context(schema_name) from the token payload before
+    querying — fully multi-tenant aware regardless of which subdomain
     (or no subdomain) the request arrived on.
     """
     from jwt import ExpiredSignatureError, InvalidTokenError, DecodeError
@@ -82,9 +82,6 @@ async def decode_jwt_token(token: str):
             logger.debug("JWT missing user_id or schema_name")
             return None
 
-        # Activate the correct tenant schema before querying Employee.
-        # Without this, the query hits whatever schema the current
-        # request is scoped to — which may be wrong or public.
         with schema_context(schema_name):
             employee = await sync_to_async(Employee.objects.get)(id=user_id)
 
@@ -97,20 +94,22 @@ async def decode_jwt_token(token: str):
         logger.debug("JWT decode failed — expired or invalid")
         return None
     except Exception:
-        # Catches Employee.DoesNotExist and any schema errors
         logger.debug("JWT decode failed — employee not found or schema error")
         return None
 
 
 # ======================================================
-# AUTH PAYLOAD — shared by both login paths
+# AUTH PAYLOAD
 # ======================================================
 
-def build_auth_payload(employee, schema_name: str, is_new_user: bool = False) -> dict:
+def build_auth_payload(
+    employee,
+    schema_name: str,
+    is_new_user: bool = False,
+) -> dict:
     """
-    Build the dict that both LoginPayload and GoogleAuthPayload
-    are populated from. Centralised so both mutations return
-    consistent data.
+    Shared by login, googleAuth, and verifyRegistration so all
+    auth paths return consistent fields.
     """
     token = create_jwt_token(employee, schema_name)
 
@@ -140,16 +139,15 @@ def build_auth_payload(employee, schema_name: str, is_new_user: bool = False) ->
 
 def find_existing_google_user(google_id: str, email: str):
     """
-    Search every tenant schema for a Google user. Two-stage:
+    Search every tenant schema for a Google user.
 
-    Stage 1 — SocialAccount match on google_id (fast, normal path).
-    Stage 2 — Email match fallback for employees whose account was
-               pre-created by an admin before they first used Google
-               Sign-In. Auto-links a SocialAccount on match so all
-               future logins use Stage 1.
+    Stage 1 — SocialAccount match on google_id (normal path).
+    Stage 2 — Email match fallback for employees pre-created by an
+               admin before their first Google Sign-In. Auto-links
+               a SocialAccount so Stage 1 handles all future logins.
 
     Returns (employee, schema_name) or (None, None).
-    This is a sync function — call via sync_to_async from mutations.
+    Sync — call via sync_to_async from mutations.
     """
     from tenants.models import Business
     from employees.models import Employee, SocialAccount
@@ -195,7 +193,7 @@ def find_existing_google_user(google_id: str, email: str):
 
 
 # ======================================================
-# GOOGLE AUTH — new tenant creation
+# TENANT CREATION
 # ======================================================
 
 def _slugify(text: str) -> str:
@@ -218,17 +216,24 @@ def _unique_schema_name(base: str) -> str:
     return name
 
 
-def create_new_tenant_and_admin(user_info: dict, business_name: str):
+def create_new_tenant_and_admin(
+    user_info: dict,
+    business_name: str,
+    set_unusable_password: bool = True,
+) -> tuple:
     """
-    Create a new Business (PostgreSQL schema auto-created),
-    an Admin Employee, and a linked SocialAccount.
+    Create a new Business (PostgreSQL schema auto-created + migrated),
+    an Admin Employee, and optionally a SocialAccount.
 
-    Only called when no existing user was found AND business_name
-    was provided. Employees are never created this way — only the
-    first admin of a brand-new Business is created here.
+    set_unusable_password=True  → Google OAuth admin (no password)
+    set_unusable_password=False → email+password admin (caller sets password)
+
+    Admin employees are always created with is_email_verified=True:
+      - Google OAuth admins: Google already verified the email
+      - Email+password admins: verified via PIN before this is called
 
     Returns (employee, schema_name).
-    This is a sync function — call via sync_to_async from mutations.
+    Sync — call via sync_to_async from mutations.
     """
     from tenants.models import Business, Domain
     from employees.models import Employee, Role, SocialAccount
@@ -237,10 +242,8 @@ def create_new_tenant_and_admin(user_info: dict, business_name: str):
     base_slug   = _slugify(business_name)
     schema_name = _unique_schema_name(base_slug)
 
-    # Business.save() triggers auto_create_schema — PostgreSQL schema
-    # is created and all tenant migrations run automatically.
     business = Business(schema_name=schema_name, name=business_name)
-    business.save()
+    business.save()  # triggers auto_create_schema
 
     Domain.objects.create(
         tenant=business,
@@ -254,26 +257,34 @@ def create_new_tenant_and_admin(user_info: dict, business_name: str):
 
             email = (
                 user_info["email"]
-                or f"google_{user_info['provider_id']}@noemail.local"
+                or f"google_{user_info.get('provider_id')}@noemail.local"
             )
 
             employee = Employee(
-                name=user_info["name"] or "Admin",
+                name=user_info.get("name") or "Admin",
                 email=email,
                 is_active=True,
+                is_email_verified=True,  # admins are always pre-verified
             )
-            employee.set_unusable_password()
+
+            if set_unusable_password:
+                employee.set_unusable_password()
+            # If False, caller sets password via employee.set_password()
+            # after this function returns
+
             employee.save()
             employee.roles.add(admin_role)
 
-            SocialAccount.objects.create(
-                employee=employee,
-                provider="google",
-                provider_id=user_info["provider_id"],
-                email=email,
-                name=user_info["name"] or "",
-                picture_url=user_info.get("picture_url"),
-            )
+            # Only create SocialAccount for Google OAuth admins
+            if user_info.get("provider_id"):
+                SocialAccount.objects.create(
+                    employee=employee,
+                    provider="google",
+                    provider_id=user_info["provider_id"],
+                    email=email,
+                    name=user_info.get("name") or "",
+                    picture_url=user_info.get("picture_url"),
+                )
 
     logger.info("Created new tenant '%s' (schema: %s)", business_name, schema_name)
     return employee, schema_name
@@ -288,11 +299,7 @@ def find_employee_by_email(email: str):
     Search every tenant schema for an Employee with this email.
 
     Returns (employee, schema_name) or (None, None).
-    This is what makes the login mutation multi-tenant aware —
-    the employee's schema is found by scanning, not assumed from
-    the request subdomain.
-
-    This is a sync function — call via sync_to_async from mutations.
+    Sync — call via sync_to_async from mutations.
     """
     from tenants.models import Business
     from employees.models import Employee
@@ -310,3 +317,87 @@ def find_employee_by_email(email: str):
                 continue
 
     return None, None
+
+
+# ======================================================
+# PENDING REGISTRATION SERVICES
+# ======================================================
+
+def create_pending_registration(email: str, business_name: str) -> str:
+    """
+    Create or replace a PendingRegistration for this email.
+    Returns the generated PIN.
+
+    Replacing invalidates any old PIN (covers the resend case).
+    Sync — call via sync_to_async from mutations.
+    """
+    from authentication.models import PendingRegistration, generate_pin
+
+    pin = generate_pin()
+
+    PendingRegistration.objects.filter(email__iexact=email).delete()
+    PendingRegistration.objects.create(
+        email=email,
+        business_name=business_name,
+        pin=pin,
+    )
+
+    logger.info("Created pending registration for %s", email)
+    return pin
+
+
+def verify_pending_registration(email: str, pin: str):
+    """
+    Verify a PIN for a pending registration.
+
+    Returns the PendingRegistration on success.
+    Raises ValueError with a user-facing message on failure.
+    Sync — call via sync_to_async from mutations.
+    """
+    from authentication.models import PendingRegistration
+
+    try:
+        pending = PendingRegistration.objects.get(email__iexact=email)
+    except PendingRegistration.DoesNotExist:
+        raise ValueError(
+            "No pending registration found for this email. "
+            "Please request a new PIN."
+        )
+
+    if pending.is_expired:
+        pending.delete()
+        raise ValueError("PIN has expired. Please request a new one.")
+
+    if pending.pin != pin:
+        raise ValueError("Incorrect PIN. Please try again.")
+
+    return pending
+
+
+def complete_pending_registration(pending) -> tuple:
+    """
+    Create the tenant and admin from a verified PendingRegistration,
+    then delete the pending record.
+
+    set_unusable_password=False because this is the email+password
+    admin path — the caller sets the password after this returns.
+
+    Returns (employee, schema_name).
+    Sync — call via sync_to_async from mutations.
+    """
+    user_info = {
+        "email":       pending.email,
+        "name":        "",    # supplied by user at step 2 (verifyRegistration)
+        "provider_id": None,  # no OAuth for this path
+        "picture_url": None,
+    }
+
+    employee, schema_name = create_new_tenant_and_admin(
+        user_info=user_info,
+        business_name=pending.business_name,
+        set_unusable_password=False,
+    )
+
+    pending.delete()
+    logger.info("Completed pending registration for %s", pending.email)
+    return employee, schema_name
