@@ -10,6 +10,8 @@ JWT creation and decoding, plus all business logic:
   - create_pending_registration()
   - verify_pending_registration()
   - complete_pending_registration()
+  - create_super_admin_jwt()
+  - decode_super_admin_jwt()
 """
 
 import re
@@ -31,7 +33,7 @@ ACCESS_TOKEN_EXPIRES = getattr(settings, "JWT_ACCESS_EXPIRES_SECONDS", 3600)
 
 
 # ======================================================
-# JWT
+# EMPLOYEE JWT
 # ======================================================
 
 def create_jwt_token(
@@ -40,15 +42,16 @@ def create_jwt_token(
     expires_in: int = ACCESS_TOKEN_EXPIRES,
 ) -> str:
     """
-    Create a signed JWT. schema_name is embedded so decode_jwt_token
-    can activate the correct tenant schema without needing the
-    request subdomain — critical for mobile clients with stored tokens.
+    Create a signed JWT for an employee.
+    schema_name is embedded so decode_jwt_token can activate the
+    correct tenant schema without needing the request subdomain.
     """
     now = timezone.now()
 
     payload = {
         "user_id":     employee.id,
         "schema_name": schema_name,
+        "role":        "employee",   # distinguishes from superadmin tokens
         "iat":         int(now.timestamp()),
         "exp":         int((now + timedelta(seconds=expires_in)).timestamp()),
     }
@@ -63,17 +66,22 @@ def create_jwt_token(
 
 async def decode_jwt_token(token: str):
     """
-    Decode a JWT and return the matching Employee, or None on failure.
+    Decode an employee JWT and return the matching Employee,
+    or None on any failure.
 
-    Activates schema_context(schema_name) from the token payload before
-    querying — fully multi-tenant aware regardless of which subdomain
-    (or no subdomain) the request arrived on.
+    Explicitly rejects SuperAdmin tokens (role='superadmin')
+    so they cannot be used against the tenant endpoint.
     """
     from jwt import ExpiredSignatureError, InvalidTokenError, DecodeError
     from employees.models import Employee
 
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
+
+        # Reject superadmin tokens on the employee decoder
+        if payload.get("role") == "superadmin":
+            logger.debug("Employee decoder rejected superadmin token")
+            return None
 
         user_id     = payload.get("user_id")
         schema_name = payload.get("schema_name")
@@ -99,7 +107,71 @@ async def decode_jwt_token(token: str):
 
 
 # ======================================================
-# AUTH PAYLOAD
+# SUPER ADMIN JWT — separate from employee JWTs
+# ======================================================
+
+def create_super_admin_jwt(
+    admin,
+    expires_in: int = ACCESS_TOKEN_EXPIRES,
+) -> str:
+    """
+    Create a JWT for the SuperAdmin.
+    No schema_name — SuperAdmin is not scoped to any tenant.
+    role='superadmin' distinguishes these tokens from employee tokens.
+    """
+    now = timezone.now()
+
+    payload = {
+        "super_admin_id": admin.id,
+        "role":           "superadmin",
+        "iat":            int(now.timestamp()),
+        "exp":            int((now + timedelta(seconds=expires_in)).timestamp()),
+    }
+
+    token = jwt.encode(payload, JWT_SECRET, algorithm=ALGORITHM)
+
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+
+    return token
+
+
+async def decode_super_admin_jwt(token: str):
+    """
+    Decode a SuperAdmin JWT.
+    Explicitly rejects employee tokens (role != 'superadmin').
+    Returns the SuperAdmin instance or None.
+    """
+    from jwt import ExpiredSignatureError, InvalidTokenError, DecodeError
+    from tenants.models import SuperAdmin
+
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
+
+        if payload.get("role") != "superadmin":
+            logger.debug("Token rejected — not a superadmin token")
+            return None
+
+        admin_id = payload.get("super_admin_id")
+        if not admin_id:
+            return None
+
+        admin = await sync_to_async(SuperAdmin.objects.get)(
+            id=admin_id,
+            is_active=True,
+        )
+        return admin
+
+    except (ExpiredSignatureError, InvalidTokenError, DecodeError):
+        logger.debug("SuperAdmin JWT decode failed — expired or invalid")
+        return None
+    except Exception:
+        logger.debug("SuperAdmin JWT decode failed — admin not found")
+        return None
+
+
+# ======================================================
+# AUTH PAYLOAD — shared by all employee auth paths
 # ======================================================
 
 def build_auth_payload(
@@ -109,7 +181,7 @@ def build_auth_payload(
 ) -> dict:
     """
     Shared by login, googleAuth, and verifyRegistration so all
-    auth paths return consistent fields.
+    employee auth paths return consistent data.
     """
     token = create_jwt_token(employee, schema_name)
 
@@ -229,8 +301,8 @@ def create_new_tenant_and_admin(
     set_unusable_password=False → email+password admin (caller sets password)
 
     Admin employees are always created with is_email_verified=True:
-      - Google OAuth admins: Google already verified the email
-      - Email+password admins: verified via PIN before this is called
+      - Google OAuth: Google already verified the email
+      - Email+password: verified via PIN before this is called
 
     Returns (employee, schema_name).
     Sync — call via sync_to_async from mutations.
@@ -269,8 +341,6 @@ def create_new_tenant_and_admin(
 
             if set_unusable_password:
                 employee.set_unusable_password()
-            # If False, caller sets password via employee.set_password()
-            # after this function returns
 
             employee.save()
             employee.roles.add(admin_role)
@@ -326,9 +396,7 @@ def find_employee_by_email(email: str):
 def create_pending_registration(email: str, business_name: str) -> str:
     """
     Create or replace a PendingRegistration for this email.
-    Returns the generated PIN.
-
-    Replacing invalidates any old PIN (covers the resend case).
+    Returns the generated PIN. Replacing invalidates any old PIN.
     Sync — call via sync_to_async from mutations.
     """
     from authentication.models import PendingRegistration, generate_pin
@@ -387,7 +455,7 @@ def complete_pending_registration(pending) -> tuple:
     """
     user_info = {
         "email":       pending.email,
-        "name":        "",    # supplied by user at step 2 (verifyRegistration)
+        "name":        "",    # supplied by user at step 2
         "provider_id": None,  # no OAuth for this path
         "picture_url": None,
     }
