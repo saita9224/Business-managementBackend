@@ -17,44 +17,51 @@ ALLOWED_HOSTS = ["*"]
 
 # ======================================================
 # MULTI-TENANCY — APP SPLIT
-# django-tenants requires INSTALLED_APPS to be composed
-# from SHARED_APPS + TENANT_APPS.
 #
-# SHARED_APPS  → live in the 'public' PostgreSQL schema.
-#                One copy for the whole platform.
-# TENANT_APPS  → cloned into every tenant's own schema.
-#                Each Business gets isolated tables.
+# The rule for deciding which list an app belongs to:
+#
+# SHARED_APPS  → tables that must exist ONCE in the public
+#                schema and nowhere else. Only infrastructure
+#                that has zero dependency on the Employee model.
+#
+# TENANT_APPS  → tables that must be isolated per business.
+#                Because AUTH_USER_MODEL = "employees.Employee",
+#                anything that references the user model
+#                (admin, auth, sessions) must live here so
+#                the Employee table exists in the same schema.
 # ======================================================
 
 SHARED_APPS = [
-    # django-tenants MUST be first in SHARED_APPS
+    # django-tenants MUST be first
     'django_tenants',
 
-    # Your tenant registry (Business + Domain models)
+    # Tenant registry — Business, Domain, SuperAdmin
     'tenants',
 
-    # Django core — shared because admin, sessions, etc.
-    # need a single home and are not per-tenant.
+    # These two have NO foreign keys to Employee and are
+    # safe to live in the public schema only.
     'django.contrib.contenttypes',
-    'django.contrib.auth',
-    'django.contrib.admin',
-    'django.contrib.sessions',
-    'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    # Third-party
+    # Third-party — no DB tables
     'corsheaders',
     'strawberry_django',
 ]
 
 TENANT_APPS = [
-    # Every app whose data must be isolated per business.
-    # django-tenants will create these tables in each
-    # tenant's PostgreSQL schema automatically.
-    'django.contrib.contenttypes',  # needed per-tenant for generic relations
+    # AUTH_USER_MODEL = "employees.Employee" means the Employee
+    # table must exist in the same schema as anything that
+    # references it. admin, auth, sessions, and messages all
+    # reference the user model, so they MUST be tenant apps.
+    'django.contrib.contenttypes',
+    'django.contrib.auth',
+    'django.contrib.admin',
+    'django.contrib.sessions',
+    'django.contrib.messages',
 
-    'employees',       # Employee, Role, Permission — fully per-tenant
-    'authentication',  # no models, but listed so migrations are applied
+    # Core business apps
+    'employees',
+    'authentication',
     'expenses',
     'inventory',
     'POS',
@@ -62,9 +69,8 @@ TENANT_APPS = [
     'reports',
 ]
 
-# INSTALLED_APPS must be the union; shared apps come first.
-# List comprehension deduplicates apps that appear in both
-# (e.g. django.contrib.contenttypes).
+# INSTALLED_APPS is the union — shared first, then tenant
+# apps that aren't already in shared.
 INSTALLED_APPS = list(SHARED_APPS) + [
     app for app in TENANT_APPS if app not in SHARED_APPS
 ]
@@ -73,29 +79,16 @@ INSTALLED_APPS = list(SHARED_APPS) + [
 # ======================================================
 # TENANT CONFIG
 # ======================================================
-
-# The model that represents a tenant (has schema_name field)
-TENANT_MODEL = "tenants.Business"
-
-# The model that maps domains/subdomains → tenants
+TENANT_MODEL        = "tenants.Business"
 TENANT_DOMAIN_MODEL = "tenants.Domain"
-
-# When True: requests to the public schema URL (e.g. bare
-# localhost without a subdomain) are still served, useful
-# during local development. Set False in production.
 SHOW_PUBLIC_IF_NO_TENANT_FOUND = True
 
 
 # ======================================================
 # MIDDLEWARE
 # ======================================================
-# TenantMainMiddleware MUST be first. It reads the incoming
-# subdomain, looks up the matching Domain record, and sets
-# the PostgreSQL search_path before any other middleware
-# or view code runs. Your JWTMiddleware (SchemaExtension)
-# then runs correctly inside the already-scoped schema.
 MIDDLEWARE = [
-    'django_tenants.middleware.main.TenantMainMiddleware',  # ← MUST be first
+    'django_tenants.middleware.main.TenantMainMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -110,14 +103,7 @@ MIDDLEWARE = [
 # ======================================================
 # URL ROUTING
 # ======================================================
-# django-tenants routes requests based on whether the
-# incoming host matches a tenant domain or the public schema.
-#
-# ROOT_URLCONF          → used for all tenant requests
-# PUBLIC_SCHEMA_URLCONF → used when the request hits the
-#                         public schema (bare localhost,
-#                         Google auth, SaaS landing)
-ROOT_URLCONF = 'backend.urls'
+ROOT_URLCONF          = 'backend.urls'
 PUBLIC_SCHEMA_URLCONF = 'backend.public_urls'
 
 
@@ -145,10 +131,6 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # ======================================================
 # DATABASE
 # ======================================================
-# ENGINE must be django_tenants.postgresql_backend — this
-# is a thin wrapper around psycopg2 that injects
-# SET search_path = <schema>, public; on every connection
-# checkout. Everything else stays the same as before.
 DATABASES = {
     'default': {
         'ENGINE': 'django_tenants.postgresql_backend',
@@ -160,8 +142,6 @@ DATABASES = {
     }
 }
 
-# Required router — tells Django which models belong to
-# shared vs tenant schemas so migrate_schemas works correctly.
 DATABASE_ROUTERS = ['django_tenants.routers.TenantSyncRouter']
 
 
@@ -182,9 +162,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # INTERNATIONALISATION
 # ======================================================
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
-USE_I18N = True
-USE_TZ = True
+TIME_ZONE     = 'UTC'
+USE_I18N      = True
+USE_TZ        = True
 
 
 # ======================================================
@@ -204,20 +184,27 @@ CORS_ALLOW_ALL_ORIGINS = True
 # ======================================================
 # JWT
 # ======================================================
-JWT_ALGORITHM = "HS256"
+JWT_ALGORITHM             = "HS256"
 JWT_ACCESS_EXPIRES_SECONDS = 3600  # 1 hour
 
 
 # ======================================================
 # GOOGLE OAUTH
 # ======================================================
-# Web client ID from Google Cloud Console.
-# APIs & Services → Credentials → OAuth 2.0 Client IDs
-# → "Hoppers Backend" (Web application type).
-#
-# Django uses this to verify the id_token sent by the
-# mobile app. The token's 'aud' field must match this value.
-#
-# The Android client ID (used only by the mobile app)
-# is NOT stored here — it lives in the React Native project.
 GOOGLE_CLIENT_ID = "536023790932-enm7mluq01p6qh5obncdl8jibtvpd6i9.apps.googleusercontent.com"
+
+
+# ======================================================
+# EMAIL — SMTP
+# ======================================================
+EMAIL_BACKEND       = 'django.core.mail.backends.smtp.EmailBackend'
+# EMAIL_HOST          = 'smtp.gmail.com'
+# EMAIL_PORT          = 587
+# EMAIL_USE_TLS       = True
+# EMAIL_HOST_USER     = 'saitacollinsgmail@gmail.com'
+# EMAIL_HOST_PASSWORD = 'itezbkdujzusvlwx'
+DEFAULT_FROM_EMAIL  = 'BizzMan <saitacollinsgmail@gmail.com>'
+
+# Uncomment during local development to print emails to
+# the terminal instead of sending them:
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
