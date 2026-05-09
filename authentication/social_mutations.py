@@ -74,6 +74,7 @@ class SocialAuthMutation:
         )(google_id, email)
 
         if employee:
+            # Reload with roles + permissions inside the correct schema
             with schema_context(schema_name):
                 employee = await sync_to_async(
                     lambda: type(employee).objects
@@ -93,12 +94,9 @@ class SocialAuthMutation:
 
         employee, schema_name = await sync_to_async(
             create_new_tenant_and_admin
-        )(
-            user_info,
-            business_name.strip(),
-            set_unusable_password=True,  # Google OAuth — no password needed
-        )
+        )(user_info, business_name.strip())
 
+        # Reload with relations
         with schema_context(schema_name):
             employee = await sync_to_async(
                 lambda: type(employee).objects
