@@ -2,7 +2,9 @@
 
 from django_tenants.models import TenantMixin, DomainMixin
 from django.db import models
+from django.utils import timezone
 from django.contrib.auth.hashers import make_password, check_password
+from datetime import timedelta
 
 
 class Business(TenantMixin):
@@ -25,14 +27,7 @@ class Domain(DomainMixin):
 class SuperAdmin(models.Model):
     """
     Platform-level administrator with access to all tenants.
-
-    Lives in the public schema — completely separate from the
-    per-tenant Employee model. Created once via management command,
-    never via GraphQL.
-
-    SuperAdmin never logs in through the tenant endpoint. It has
-    its own JWT with no schema_name — it uses schema_context
-    explicitly when it needs to enter a tenant schema.
+    Created once via management command, never via GraphQL.
     """
 
     email      = models.EmailField(unique=True, db_index=True)
@@ -54,3 +49,47 @@ class SuperAdmin(models.Model):
 
     def __str__(self):
         return f"SuperAdmin({self.email})"
+
+
+# ======================================================
+# PENDING REGISTRATION — lives in the public schema
+# ======================================================
+
+class PendingRegistration(models.Model):
+    """
+    Temporary record created when a new admin requests registration
+    via the email+password path.
+
+    Moved here from authentication/models.py so it lives cleanly
+    in a SHARED_APP with no tenant conflict.
+
+    Lifecycle:
+        created  → requestRegistration mutation
+        verified → verifyRegistration mutation (record deleted)
+        expired  → detected on verify attempt (record deleted)
+        resent   → requestRegistration called again (old record replaced)
+
+    Google OAuth admins never touch this model — they are verified
+    by Google directly and bypass this flow entirely.
+    """
+
+    email         = models.EmailField(unique=True, db_index=True)
+    business_name = models.CharField(max_length=200)
+    pin           = models.CharField(max_length=6)
+    created_at    = models.DateTimeField(auto_now_add=True)
+    expires_at    = models.DateTimeField()
+
+    class Meta:
+        app_label = 'tenants'
+
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            self.expires_at = timezone.now() + timedelta(minutes=30)
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() > self.expires_at
+
+    def __str__(self):
+        return f"PendingRegistration({self.email}, expires={self.expires_at})"

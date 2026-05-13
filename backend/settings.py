@@ -29,6 +29,8 @@ SHARED_APPS = [
     'django.contrib.staticfiles',
     'corsheaders',
     'strawberry_django',
+
+    'authentication',
 ]
 
 TENANT_APPS = [
