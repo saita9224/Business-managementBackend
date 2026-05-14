@@ -1,18 +1,4 @@
 # backend/public_urls.py
-#
-# Handles all requests arriving on the bare/public domain —
-# i.e. when no tenant subdomain is matched by TenantMainMiddleware.
-#
-# This file serves:
-#   - Google OAuth (googleAuth mutation)
-#   - Email+password admin registration (requestRegistration,
-#     verifyRegistration mutations)
-#   - SuperAdmin login and management (separate endpoint)
-#   - Platform-level Django admin
-#   - Health check endpoint
-#
-# Regular tenant GraphQL (inventory, POS, HR, etc.) is NOT here —
-# those requests arrive on a subdomain and are handled by backend/urls.py
 
 import strawberry
 from django.contrib import admin
@@ -24,31 +10,27 @@ from strawberry.django.views import AsyncGraphQLView
 from authentication.social_mutations import SocialAuthMutation
 from authentication.mutations import AuthMutation
 
+from expenses.dataloaders  import create_expenses_dataloaders
+from inventory.dataloaders import create_inventory_dataloaders
+from POS.dataloaders       import create_pos_dataloaders
+from hr.dataloaders        import create_hr_dataloaders
+from backend.schema        import schema
+from backend.middleware    import JWTMiddleware
+
 
 # ======================================================
 # PUBLIC GRAPHQL SCHEMA
-# Contains every mutation needed before a tenant context
-# exists. Everything else lives in backend/urls.py.
 # ======================================================
 
 @strawberry.type
 class PublicQuery:
     @strawberry.field
     def status(self) -> str:
-        """Health check — confirms the public schema is reachable."""
         return "ok"
 
 
 @strawberry.type
 class PublicMutation(SocialAuthMutation, AuthMutation):
-    """
-    Combines:
-      SocialAuthMutation → googleAuth
-      AuthMutation       → login, requestRegistration, verifyRegistration
-
-    All pre-auth mutations live here so the mobile app has a single
-    public endpoint to call before it has a tenant subdomain.
-    """
     pass
 
 
@@ -58,34 +40,18 @@ public_schema = strawberry.Schema(
 )
 
 
-# ======================================================
-# PUBLIC GRAPHQL VIEW
-# No dataloaders, no JWTMiddleware — those belong on the
-# tenant endpoint. This view is intentionally minimal.
-# ======================================================
-
 class PublicGraphQLView(AsyncGraphQLView):
-    """
-    Thin wrapper kept in case you need to inject public-schema
-    context (e.g. rate limiting, analytics) in future.
-    Nothing extra needed right now.
-    """
     pass
 
 
 # ======================================================
 # SUPER ADMIN SCHEMA
-# Completely separate from the public schema.
-# SuperAdmin is not an Employee — it is a platform-level
-# account that lives in the public schema and can reach
-# into any tenant schema via schema_context.
 # ======================================================
 
 @strawberry.type
 class SuperAdminQuery:
     @strawberry.field
     def super_status(self) -> str:
-        """Health check for the SuperAdmin endpoint."""
         return "SuperAdmin endpoint active"
 
 
@@ -98,11 +64,6 @@ class SuperAdminMutation:
         email:    str,
         password: str,
     ) -> "SuperAdminLoginPayload":
-        """
-        Authenticate the platform SuperAdmin.
-        Returns a SuperAdmin JWT — distinct from employee JWTs,
-        contains role='superadmin' and no schema_name.
-        """
         from asgiref.sync import sync_to_async
         from django.utils import timezone
         from tenants.models import SuperAdmin
@@ -139,11 +100,6 @@ class SuperAdminMutation:
 
     @strawberry.mutation
     async def list_tenants(self, info) -> list[str]:
-        """
-        List all registered tenant names.
-        Requires a valid SuperAdmin JWT in the Authorization header.
-        Add further SuperAdmin mutations here as needed.
-        """
         from asgiref.sync import sync_to_async
         from tenants.models import Business
         from authentication.services import decode_super_admin_jwt
@@ -177,7 +133,6 @@ class SuperAdminLoginPayload:
 
 
 def _extract_bearer_token(info) -> str | None:
-    """Extract Bearer token from Authorization header."""
     ctx     = info.context
     request = getattr(ctx, "request", None)
     if not request:
@@ -192,6 +147,46 @@ super_admin_schema = strawberry.Schema(
     query=SuperAdminQuery,
     mutation=SuperAdminMutation,
 )
+
+
+# ======================================================
+# TENANT GRAPHQL VIEW
+# Used in development when requests arrive via bare IP.
+# XTenantMiddleware reads X-Tenant header and switches
+# the schema before this view handles the request.
+# In production this view is never used — tenant requests
+# arrive on subdomains and are routed to backend/urls.py.
+# ======================================================
+
+class TenantGraphQLView(AsyncGraphQLView):
+    """
+    Serves tenant GraphQL requests in development.
+    Identical to CustomGraphQLView in backend/urls.py —
+    same dataloaders, same schema, same JWTMiddleware.
+    """
+
+    async def get_context(self, request, response):
+        base_context = await super().get_context(request, response)
+
+        expenses_loaders = create_expenses_dataloaders()
+        base_context.supplier_loader             = expenses_loaders["supplier_loader"]
+        base_context.product_loader              = expenses_loaders["product_loader"]
+        base_context.payments_by_expense_loader  = expenses_loaders["payments_by_expense_loader"]
+        base_context.expenses_by_supplier_loader = expenses_loaders["expenses_by_supplier_loader"]
+        base_context.payment_total_loader        = expenses_loaders["payment_total_loader"]
+
+        for key, loader in create_inventory_dataloaders().items():
+            setattr(base_context, key, loader)
+
+        for key, loader in create_pos_dataloaders().items():
+            setattr(base_context, key, loader)
+
+        for key, loader in create_hr_dataloaders().items():
+            setattr(base_context, key, loader)
+
+        base_context.tenant = getattr(request, 'tenant', None)
+
+        return base_context
 
 
 # ======================================================
@@ -210,18 +205,10 @@ def platform_status(request):
 # ======================================================
 
 urlpatterns = [
-    # Platform-level Django admin.
-    # Operates in the public schema — use this to create and
-    # manage Business, Domain, and SuperAdmin records.
     path("admin/", admin.site.urls),
-
-    # Simple HTTP health check (no GraphQL overhead).
     path("status/", platform_status),
 
-    # Public GraphQL endpoint.
-    # Mobile app calls this for all pre-auth mutations:
-    #   googleAuth, requestRegistration, verifyRegistration, login
-    # graphiql=True keeps the browser IDE in DEBUG mode.
+    # Public auth — googleAuth, requestRegistration, verifyRegistration, login
     path(
         "auth/",
         csrf_exempt(
@@ -229,13 +216,21 @@ urlpatterns = [
         ),
     ),
 
-    # SuperAdmin-only GraphQL endpoint.
-    # Not accessible to regular employees or admins.
-    # Authentication via superAdminLogin mutation.
+    # SuperAdmin only
     path(
         "super/graphql/",
         csrf_exempt(
             AsyncGraphQLView.as_view(schema=super_admin_schema, graphiql=True)
+        ),
+    ),
+
+    # Tenant GraphQL — development only (bare IP access)
+    # In production, tenant requests use subdomains → backend/urls.py
+    # In development, XTenantMiddleware + this path handles them
+    path(
+        "graphql/",
+        csrf_exempt(
+            TenantGraphQLView.as_view(schema=schema, graphiql=True)
         ),
     ),
 ]
