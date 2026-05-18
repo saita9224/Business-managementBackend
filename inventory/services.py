@@ -38,9 +38,9 @@ def _validate_reason(reason: str):
 @transaction.atomic
 def add_stock(
     *,
-    product: Product,
-    quantity: float,
-    reason: str,
+    product:            Product,
+    quantity:           float,
+    reason:             str,
     performed_by,
     expense_item_id:    int | None = None,
     funded_by_business: bool = True,
@@ -98,12 +98,12 @@ def add_stock(
 @transaction.atomic
 def remove_stock(
     *,
-    product:  Product,
-    quantity: float,
-    reason:   str,
+    product:      Product,
+    quantity:     float,
+    reason:       str,
     performed_by,
-    group_id: str | None = None,
-    notes:    str | None = None,
+    group_id:     str | None = None,
+    notes:        str | None = None,
 ) -> StockMovement:
 
     _validate_quantity(quantity)
@@ -179,12 +179,36 @@ def add_stock_from_expense(
 
 
 # ======================================================
+# CREATE PRODUCT STANDALONE (no stock)
+# category is now a Category instance, not a string
+# ======================================================
+
+def create_product(
+    *,
+    name:                str,
+    unit:                str,
+    category=None,
+    auto_deduct_on_sale: bool = False,
+) -> tuple:
+
+    name = (name or "").strip()
+    if not name:
+        raise ValidationError("Product name is required")
+
+    return Product.objects.get_or_create(
+        name__iexact=name,
+        defaults={
+            "name":                name,
+            "unit":                unit,
+            "category":            category,
+            "auto_deduct_on_sale": auto_deduct_on_sale,
+        },
+    )
+
+
+# ======================================================
 # CREATE PRODUCT WITH INITIAL STOCK — ATOMIC
-#
-# auto_deduct_on_sale defaults to False — staff must
-# explicitly opt in for products sold through POS.
-# Raw ingredients, cooking supplies etc. should be False.
-# Directly sold items (water, snacks etc.) should be True.
+# category is now a Category instance, not a string
 # ======================================================
 
 @transaction.atomic
@@ -192,7 +216,7 @@ def create_product_with_stock(
     *,
     name:                str,
     unit:                str,
-    category:            str | None,
+    category=None,
     quantity:            float,
     expense_item_id:     int,
     performed_by,
@@ -236,43 +260,7 @@ def create_product_with_stock(
         notes=f"Initial stock from expense #{expense_item_id}",
     )
 
-    return {
-        "product": product,
-        "movement": movement,
-        "created": created,
-    }
-
-
-# ======================================================
-# CREATE PRODUCT STANDALONE (no stock)
-#
-# auto_deduct_on_sale defaults to False.
-# ======================================================
-
-def create_product(
-    *,
-    name:                str,
-    unit:                str,
-    category:            str | None = None,
-    auto_deduct_on_sale: bool = False,
-) -> tuple[Product, bool]:
-    """
-    Creates a product with no initial stock.
-    Returns (product, created) tuple.
-    """
-    name = (name or "").strip()
-    if not name:
-        raise ValidationError("Product name is required")
-
-    return Product.objects.get_or_create(
-        name__iexact=name,
-        defaults={
-            "name":                name,
-            "unit":                unit,
-            "category":            category,
-            "auto_deduct_on_sale": auto_deduct_on_sale,
-        },
-    )
+    return {"product": product, "movement": movement, "created": created}
 
 
 # ======================================================
@@ -352,7 +340,7 @@ def reject_reconciliation(
 @transaction.atomic
 def submit_reconciliation(
     *,
-    counts: list[dict],
+    counts:     list[dict],
     counted_by,
 ) -> list[StockReconciliation]:
 

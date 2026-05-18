@@ -169,7 +169,8 @@ JWT_ACCESS_EXPIRES_SECONDS = 3600  # 1 hour
 # ======================================================
 # GOOGLE OAUTH
 # ======================================================
-GOOGLE_CLIENT_ID = config('GOOGLE_CLIENT_ID')
+GOOGLE_CLIENT_ID         = config('GOOGLE_CLIENT_ID')
+GOOGLE_ANDROID_CLIENT_ID = config('GOOGLE_ANDROID_CLIENT_ID', default='')
 
 
 # ======================================================
