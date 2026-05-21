@@ -40,7 +40,7 @@ class EmployeeManager(BaseUserManager):
 # EMPLOYEE MODEL (AUTH USER)
 # ======================================================
 class Employee(AbstractBaseUser, PermissionsMixin):
-    name = models.CharField(max_length=100)
+    name  = models.CharField(max_length=100)
     email = models.EmailField(unique=True, db_index=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
 
@@ -52,13 +52,23 @@ class Employee(AbstractBaseUser, PermissionsMixin):
     )
 
     is_active = models.BooleanField(default=True)
-    is_staff = models.BooleanField(default=False)  # REQUIRED for Django admin
+    is_staff  = models.BooleanField(default=False)
+
+    # ── Email verification ─────────────────────────────
+    # Admins created via Google OAuth are verified immediately
+    # (Google already verified the email).
+    # Admins created via email+password are verified during
+    # the requestRegistration → verifyRegistration flow before
+    # the schema is even created, so they also start as True.
+    # Employees created by an admin start as False and must
+    # verify via the PIN sent in their welcome email.
+    is_email_verified = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = EmployeeManager()
 
-    USERNAME_FIELD = "email"
+    USERNAME_FIELD  = "email"
     REQUIRED_FIELDS = ["name"]
 
     def __str__(self):
@@ -76,9 +86,9 @@ class Employee(AbstractBaseUser, PermissionsMixin):
 # ROLE MODEL
 # ======================================================
 class Role(models.Model):
-    name = models.CharField(max_length=100, unique=True)
+    name        = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
 
     permissions = models.ManyToManyField(
         "Permission",
@@ -94,8 +104,8 @@ class Role(models.Model):
 # PERMISSION MODEL
 # ======================================================
 class Permission(models.Model):
-    code = models.CharField(max_length=150, unique=True)
-    name = models.CharField(max_length=150, unique=True)
+    code        = models.CharField(max_length=150, unique=True)
+    name        = models.CharField(max_length=150, unique=True)
     description = models.CharField(max_length=250)
 
     def __str__(self):
@@ -106,7 +116,7 @@ class Permission(models.Model):
 # ROLE → PERMISSION
 # ======================================================
 class RolePermission(models.Model):
-    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+    role       = models.ForeignKey(Role, on_delete=models.CASCADE)
     permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
 
     class Meta:
@@ -121,7 +131,7 @@ class RolePermission(models.Model):
 # ======================================================
 class EmployeeRole(models.Model):
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
-    role = models.ForeignKey(Role, on_delete=models.CASCADE)
+    role     = models.ForeignKey(Role, on_delete=models.CASCADE)
 
     class Meta:
         indexes = [
@@ -131,3 +141,64 @@ class EmployeeRole(models.Model):
 
     def __str__(self):
         return f"{self.employee.email} → {self.role.name}"
+
+
+# ======================================================
+# SOCIAL ACCOUNT
+# ======================================================
+class SocialAccount(models.Model):
+    """
+    Links a Google OAuth identity to an Employee.
+    Stored in each tenant's schema alongside the Employee.
+    """
+
+    PROVIDER_GOOGLE  = "google"
+    PROVIDER_CHOICES = [
+        (PROVIDER_GOOGLE, "Google"),
+    ]
+
+    employee    = models.ForeignKey(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="social_accounts",
+    )
+    provider    = models.CharField(max_length=20, choices=PROVIDER_CHOICES)
+    provider_id = models.CharField(max_length=255)
+    email       = models.EmailField()
+    name        = models.CharField(max_length=150, blank=True)
+    picture_url = models.URLField(blank=True, null=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("provider", "provider_id")
+        indexes = [
+            models.Index(fields=["provider", "provider_id"]),
+        ]
+
+    def __str__(self):
+        return f"{self.provider}:{self.provider_id} → {self.employee.email}"
+
+
+# ======================================================
+# EMAIL VERIFICATION (per-tenant)
+# ======================================================
+class EmailVerification(models.Model):
+    """
+    Stores the PIN sent to a newly created employee for email
+    verification. No expiry — employee can verify at any time.
+    Deleted once the PIN is confirmed.
+
+    Only used for employees created by an admin (email+password path).
+    Admin accounts are always verified before or during registration.
+    """
+
+    employee   = models.OneToOneField(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="email_verification",
+    )
+    pin        = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"EmailVerification({self.employee.email})"

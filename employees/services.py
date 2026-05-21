@@ -1,11 +1,21 @@
 # employees/services.py
 
+import logging
 from typing import List, Optional
 
 from django.db import transaction
 from django.core.exceptions import ValidationError
 
-from .models import Employee, Role, Permission, RolePermission, EmployeeRole
+from .models import (
+    Employee,
+    Role,
+    Permission,
+    RolePermission,
+    EmployeeRole,
+    EmailVerification,
+)
+
+logger = logging.getLogger(__name__)
 
 
 # ======================================================
@@ -44,7 +54,7 @@ def delete_role(role_id: int) -> bool:
 # ======================================================
 
 def create_permission(
-    code: str,
+    code:        str,
     description: Optional[str] = None,
 ) -> Permission:
     perm, _ = Permission.objects.get_or_create(
@@ -122,8 +132,14 @@ def create_employee(
     phone:      Optional[str],
     password:   str,
     role_names: List[str],
-) -> Employee:
+) -> tuple[Employee, str]:
+    """
+    Create a basic employee with named roles.
 
+    Returns (employee, plain_password) so the caller can
+    include the plain password in the welcome email before
+    it is hashed and lost.
+    """
     if Employee.objects.filter(email=email).exists():
         raise ValidationError(
             f"An employee with email '{email}' already exists"
@@ -138,15 +154,17 @@ def create_employee(
         )
         roles.append(role)
 
-    employee = Employee.objects.create(
+    employee = Employee(
         name=name,
         email=email,
         phone=phone or "",
+        is_email_verified=False,  # employee must verify on first login
     )
     employee.set_password(password)
     employee.save()
     employee.roles.set(roles)
-    return employee
+
+    return employee, password
 
 
 @transaction.atomic
@@ -201,16 +219,8 @@ def delete_employee(employee_id: int) -> bool:
 # ======================================================
 # ONBOARD EMPLOYEE — ATOMIC
 #
-# Single transaction that:
-# 1. Creates the Employee
-# 2. Creates a personal Role named {name}_{employee.id}
-# 3. Fetches all Permission objects matching the provided
-#    codes in ONE query (filter code__in=permission_codes)
-# 4. Bulk creates all RolePermission records in ONE query
-# 5. Creates the EmployeeRole link
-#
-# If anything fails the entire transaction rolls back —
-# no orphaned employees or half-assigned roles.
+# Creates Employee + personal Role + RolePermissions in a
+# single transaction. Sends verification email after commit.
 # ======================================================
 
 @transaction.atomic
@@ -221,9 +231,14 @@ def onboard_employee(
     phone:            Optional[str],
     password:         str,
     permission_codes: List[str],
-) -> Employee:
+) -> tuple[Employee, str]:
+    """
+    Create an employee and assign granular permissions atomically.
 
-    # ── Validate email uniqueness ──────────────────────
+    Returns (employee, plain_password) so the caller can pass the
+    plain password to the welcome email before it is hashed.
+    """
+
     if Employee.objects.filter(email=email).exists():
         raise ValidationError(
             f"An employee with email '{email}' already exists."
@@ -234,40 +249,91 @@ def onboard_employee(
             "At least one permission must be selected."
         )
 
-    # ── 1. Create employee ─────────────────────────────
+    # 1. Create employee — unverified until they confirm PIN
     employee = Employee(
         name=name,
         email=email,
         phone=phone or "",
+        is_email_verified=False,
     )
     employee.set_password(password)
     employee.save()
 
-    # ── 2. Create personal role ────────────────────────
+    # 2. Create personal role
     role_name = f"{name.strip().replace(' ', '_')}_{employee.id}"
     role = Role.objects.create(
         name=role_name,
         description=f"Personal role for {name}",
     )
 
-    # ── 3. Fetch matching permissions in one query ─────
-    permissions = Permission.objects.filter(
-        code__in=permission_codes
-    )
+    # 3. Fetch permissions in one query
+    permissions = Permission.objects.filter(code__in=permission_codes)
 
-    unrecognised = set(permission_codes) - set(p.code for p in permissions)
+    unrecognised = set(permission_codes) - {p.code for p in permissions}
     if unrecognised:
         raise ValidationError(
             f"Unknown permission codes: {', '.join(sorted(unrecognised))}"
         )
 
-    # ── 4. Bulk create RolePermission records ──────────
+    # 4. Bulk create RolePermission records
     RolePermission.objects.bulk_create([
         RolePermission(role=role, permission=perm)
         for perm in permissions
     ])
 
-    # ── 5. Assign role to employee ─────────────────────
+    # 5. Assign role to employee
     EmployeeRole.objects.create(employee=employee, role=role)
 
-    return employee
+    return employee, password
+
+
+# ======================================================
+# EMAIL VERIFICATION SERVICES
+# ======================================================
+
+def create_employee_verification_pin(employee: Employee) -> str:
+    """
+    Generate a 6-digit PIN and store it in EmailVerification
+    for the given employee. Replaces any existing PIN (resend).
+
+    Returns the plain PIN so the caller can email it.
+    Sync — call via sync_to_async from async mutations.
+    """
+    from authentication.models import generate_pin
+
+    pin = generate_pin()
+
+    # Replace any existing verification record (covers resend case)
+    EmailVerification.objects.filter(employee=employee).delete()
+    EmailVerification.objects.create(employee=employee, pin=pin)
+
+    logger.info("Created email verification PIN for %s", employee.email)
+    return pin
+
+
+def verify_employee_email_pin(employee: Employee, pin: str) -> None:
+    """
+    Verify an employee's email PIN.
+
+    On success: marks employee as verified, deletes the record.
+    On failure: raises ValueError with a user-facing message.
+    Sync — call via sync_to_async from async mutations.
+    """
+    try:
+        verification = EmailVerification.objects.get(employee=employee)
+    except EmailVerification.DoesNotExist:
+        raise ValueError(
+            "No verification PIN found for your account. "
+            "Ask your admin to resend the verification email."
+        )
+
+    if verification.pin != pin:
+        raise ValueError(
+            "Incorrect PIN. Please check your email and try again."
+        )
+
+    employee.is_email_verified = True
+    employee.save(update_fields=["is_email_verified"])
+    verification.delete()
+
+    logger.info("Email verified for %s", employee.email)

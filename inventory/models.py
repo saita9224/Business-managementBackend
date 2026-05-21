@@ -7,23 +7,33 @@ from django.core.exceptions import ValidationError
 
 
 # ======================================================
+# CATEGORY
+# ======================================================
+
+class Category(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+# ======================================================
 # PRODUCT
 # ======================================================
 
 class Product(models.Model):
-    """
-    Inventory product.
-
-    Stock is NEVER stored directly.
-    Derived strictly from StockMovement.
-
-    POS may auto-deduct stock ONLY if auto_deduct_on_sale = True.
-    Default is False — staff must explicitly opt in at creation time.
-    """
-
     name     = models.CharField(max_length=200, unique=True)
-    category = models.CharField(max_length=200, blank=True, null=True)
-    unit     = models.CharField(max_length=50, default="kg")
+    category = models.ForeignKey(
+        Category,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="products",
+    )
+    unit = models.CharField(max_length=50, default="kg")
 
     auto_deduct_on_sale = models.BooleanField(
         default=False,
@@ -40,7 +50,6 @@ class Product(models.Model):
         ordering = ["name"]
         indexes = [
             models.Index(fields=["name"]),
-            models.Index(fields=["category"]),
         ]
 
     def __str__(self):
@@ -48,7 +57,6 @@ class Product(models.Model):
 
     @property
     def current_stock(self) -> float:
-        """Stock = total IN - total OUT"""
         ins = (
             self.movements
             .filter(movement_type=StockMovement.IN)
@@ -65,15 +73,10 @@ class Product(models.Model):
 
 
 # ======================================================
-# STOCK MOVEMENT (SINGLE SOURCE OF TRUTH)
+# STOCK MOVEMENT
 # ======================================================
 
 class StockMovement(models.Model):
-    """
-    Unified stock movement log.
-    SINGLE SOURCE OF TRUTH for inventory.
-    """
-
     IN  = "IN"
     OUT = "OUT"
 
@@ -166,16 +169,10 @@ class StockMovement(models.Model):
 
 
 # ======================================================
-# STOCK RECONCILIATION (NOT SOURCE OF TRUTH)
+# STOCK RECONCILIATION
 # ======================================================
 
 class StockReconciliation(models.Model):
-    """
-    Temporary storage for physical stock counts.
-    NOT a source of truth.
-    Must be approved to affect StockMovement.
-    """
-
     PENDING  = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
@@ -192,7 +189,7 @@ class StockReconciliation(models.Model):
         related_name="reconciliations",
     )
     counted_quantity = models.FloatField(help_text="Physically counted stock")
-    system_quantity  = models.FloatField(help_text="System-calculated stock at time of count")
+    system_quantity  = models.FloatField(help_text="System stock at time of count")
     difference       = models.FloatField(help_text="counted_quantity - system_quantity")
 
     status = models.CharField(
