@@ -131,6 +131,9 @@ class InventoryMutation:
 
     # --------------------------------------------------------
     # CREATE PRODUCT (standalone)
+    # category is reloaded with select_related inside the
+    # sync block so wrap_product never triggers a lazy DB
+    # hit from an async context.
     # --------------------------------------------------------
     @strawberry.mutation
     @permission_required("inventory.product.create")
@@ -154,7 +157,15 @@ class InventoryMutation:
                 category=category,
                 auto_deduct_on_sale=input.auto_deduct_on_sale,
             )
-            return product
+
+            # Reload with category pre-fetched so wrap_product
+            # can access product.category without a lazy DB hit
+            # from the async context.
+            return (
+                Product.objects
+                .select_related("category")
+                .get(pk=product.pk)
+            )
 
         try:
             product = await sync_to_async(run)()
@@ -166,6 +177,7 @@ class InventoryMutation:
 
     # --------------------------------------------------------
     # CREATE PRODUCT WITH STOCK — ATOMIC
+    # Same pattern: reload with select_related inside run().
     # --------------------------------------------------------
     @strawberry.mutation
     @permission_required("inventory.product.create")
@@ -185,7 +197,7 @@ class InventoryMutation:
                 except Category.DoesNotExist:
                     raise ValueError("Category not found")
 
-            return create_product_with_stock_service(
+            result = create_product_with_stock_service(
                 name=input.name,
                 unit=input.unit,
                 category=category,
@@ -195,13 +207,19 @@ class InventoryMutation:
                 auto_deduct_on_sale=input.auto_deduct_on_sale,
             )
 
+            # Reload with category pre-fetched
+            return (
+                Product.objects
+                .select_related("category")
+                .get(pk=result["product"].pk)
+            )
+
         try:
-            result = await sync_to_async(run)()
+            product = await sync_to_async(run)()
         except Exception as e:
             raise GraphQLError(str(e))
 
-        product = result["product"]
-        stock   = await info.context.current_stock_loader.load(product.id)
+        stock = await info.context.current_stock_loader.load(product.id)
         return wrap_product(product, float(stock or 0))
 
     # --------------------------------------------------------
@@ -292,6 +310,8 @@ class InventoryMutation:
 
     # --------------------------------------------------------
     # SUBMIT RECONCILIATION
+    # Products from bulk_create don't have category cached —
+    # reload them with select_related before wrap_product.
     # --------------------------------------------------------
     @strawberry.mutation
     @permission_required("inventory.stock.adjust")
@@ -311,11 +331,22 @@ class InventoryMutation:
             for entry in input.counts
         ]
 
-        try:
-            reconciliations = await sync_to_async(submit_reconciliation_service)(
+        def run():
+            reconciliations = submit_reconciliation_service(
                 counts=counts,
                 counted_by=employee,
             )
+            # Reload each reconciliation's product with category
+            recon_ids = [r.id for r in reconciliations]
+            return list(
+                StockReconciliation.objects
+                .select_related("product", "product__category", "counted_by")
+                .filter(pk__in=recon_ids)
+                .order_by("id")
+            )
+
+        try:
+            reconciliations = await sync_to_async(run)()
         except Exception as e:
             raise GraphQLError(str(e))
 
@@ -339,6 +370,8 @@ class InventoryMutation:
 
     # --------------------------------------------------------
     # APPROVE RECONCILIATION
+    # refresh_from_db() clears the category cache, so we
+    # re-fetch with select_related after the approval.
     # --------------------------------------------------------
     @strawberry.mutation
     @permission_required("inventory.stock.adjust")
@@ -357,11 +390,16 @@ class InventoryMutation:
                 ).get(pk=reconciliation_id)
             except StockReconciliation.DoesNotExist:
                 raise ValueError("Reconciliation not found")
+
             approve_reconciliation_service(
                 reconciliation=recon, approved_by=employee,
             )
-            recon.refresh_from_db()
-            return recon
+
+            # Re-fetch after approval so status + product__category
+            # are both fresh and cached
+            return StockReconciliation.objects.select_related(
+                "product", "product__category", "counted_by"
+            ).get(pk=recon.pk)
 
         try:
             recon = await sync_to_async(run)()
@@ -384,6 +422,7 @@ class InventoryMutation:
 
     # --------------------------------------------------------
     # REJECT RECONCILIATION
+    # Same pattern as approve — re-fetch with select_related.
     # --------------------------------------------------------
     @strawberry.mutation
     @permission_required("inventory.stock.adjust")
@@ -403,11 +442,15 @@ class InventoryMutation:
                 ).get(pk=reconciliation_id)
             except StockReconciliation.DoesNotExist:
                 raise ValueError("Reconciliation not found")
+
             reject_reconciliation_service(
                 reconciliation=recon, approved_by=employee, notes=notes,
             )
-            recon.refresh_from_db()
-            return recon
+
+            # Re-fetch with category cached
+            return StockReconciliation.objects.select_related(
+                "product", "product__category", "counted_by"
+            ).get(pk=recon.pk)
 
         try:
             recon = await sync_to_async(run)()
