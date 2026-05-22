@@ -27,6 +27,20 @@ from .models import (
 TWO = Decimal("0.01")
 
 
+# ── Internal helper: ensure default PriceList exists ─────
+# Called before any sale operation that needs a PriceList FK.
+# Auto-creates the default list so the POS works out of the
+# box without manual setup.
+
+def _get_or_create_default_price_list():
+    from .models import PriceList
+    price_list, _ = PriceList.objects.get_or_create(
+        is_default=True,
+        defaults={"name": "Default Price List"},
+    )
+    return price_list
+
+
 # ── Internal helper: sync MenuItem.price → PriceListItem ──
 # Called whenever an inventory-linked MenuItem is created or
 # its price is updated. Keeps PriceListItem in sync so that
@@ -41,11 +55,9 @@ def _sync_price_list_item(menu_item: MenuItem) -> None:
     if menu_item.product_id is None:
         return
 
-    from .models import PriceList, PriceListItem
+    from .models import PriceListItem
 
-    price_list = PriceList.objects.filter(is_default=True).first()
-    if not price_list:
-        return  # No default price list — nothing to sync
+    price_list = _get_or_create_default_price_list()
 
     PriceListItem.objects.update_or_create(
         price_list=price_list,
@@ -151,6 +163,9 @@ def add_order_item(
        If found → listed_price = PriceListItem.selling_price
     2. If not found → listed_price = final_price (no override)
 
+    The default PriceList is auto-created if it doesn't exist yet,
+    so no manual setup is required before the first sale.
+
     Since _sync_price_list_item is called whenever a MenuItem is
     created or updated, PriceListItem will always exist for any
     inventory-linked menu item that has been priced by staff.
@@ -166,23 +181,22 @@ def add_order_item(
     final_price = Decimal(str(final_price)).quantize(TWO, rounding=ROUND_HALF_UP)
     qty         = Decimal(str(quantity)).quantize(TWO, rounding=ROUND_HALF_UP)
 
-    from .models import PriceListItem, PriceList
+    from .models import PriceListItem
+
+    # Auto-create default price list if missing — no manual setup required
+    price_list = _get_or_create_default_price_list()
+
+    # Look up whether this product has an official price entry
     try:
-        default_price_list = PriceList.objects.get(is_default=True)
-        price_list_item    = PriceListItem.objects.get(
-            price_list=default_price_list,
+        price_list_item = PriceListItem.objects.get(
+            price_list=price_list,
             product_id=product.id,
         )
         listed_price = price_list_item.selling_price.quantize(TWO, rounding=ROUND_HALF_UP)
-        price_list   = default_price_list
-    except (PriceList.DoesNotExist, PriceListItem.DoesNotExist):
-        # No price list entry — treat final_price as the official price
+    except PriceListItem.DoesNotExist:
+        # No price entry yet — treat final_price as the official price.
+        # Happens for products not yet priced via the Menu Manager.
         listed_price = final_price
-        price_list   = PriceList.objects.filter(is_default=True).first()
-        if not price_list:
-            raise ValidationError(
-                "No default price list found. Please configure one before selling."
-            )
 
     price_overridden = final_price != listed_price
 
@@ -223,14 +237,13 @@ def add_menu_order_item(
     Uses the menu item's price directly.
     No PriceListItem lookup, no stock deduction.
     product_id stored as 0 (sentinel — no real inventory product).
+    The default PriceList is auto-created if it doesn't exist yet.
     """
     if quantity <= 0:
         raise ValidationError("Quantity must be greater than zero.")
 
-    from .models import PriceList
-    price_list = PriceList.objects.filter(is_default=True).first()
-    if not price_list:
-        raise ValidationError("No default price list found.")
+    # Auto-create default price list if missing
+    price_list = _get_or_create_default_price_list()
 
     final_price = menu_item.price.quantize(TWO, rounding=ROUND_HALF_UP)
     qty         = Decimal(str(quantity)).quantize(TWO, rounding=ROUND_HALF_UP)
@@ -560,8 +573,6 @@ def create_menu_item(
     if product_id:
         try:
             product = InventoryProduct.objects.get(pk=product_id)
-            # Allow update if MenuItem already exists (e.g. was zero-priced)
-            # hasattr check uses the reverse OneToOne descriptor
             if hasattr(product, "menu_item") and product.menu_item is not None:
                 raise ValidationError("This product already has a menu item.")
         except InventoryProduct.DoesNotExist:
@@ -610,7 +621,6 @@ def update_menu_item(
     item.save()
 
     # Re-sync price into PriceListItem whenever anything changes
-    # (name change also updates product_name on PriceListItem)
     _sync_price_list_item(item)
 
     return item
