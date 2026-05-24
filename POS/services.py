@@ -233,10 +233,10 @@ def add_menu_order_item(
     sold_by: Employee,
 ) -> OrderItem:
     """
-    Adds a manual menu item (no inventory product) to an order.
-    Uses the menu item's price directly.
-    No PriceListItem lookup, no stock deduction.
-    product_id stored as 0 (sentinel — no real inventory product).
+    Adds a menu item to an order.
+    Inventory-linked menu items keep their product_id so submit_order can
+    apply the product's auto_deduct_on_sale rule. Manual menu items store
+    product_id=0 as the no-inventory sentinel.
     The default PriceList is auto-created if it doesn't exist yet.
     """
     if quantity <= 0:
@@ -248,10 +248,11 @@ def add_menu_order_item(
     final_price = menu_item.price.quantize(TWO, rounding=ROUND_HALF_UP)
     qty         = Decimal(str(quantity)).quantize(TWO, rounding=ROUND_HALF_UP)
     line_total  = (final_price * qty).quantize(TWO, rounding=ROUND_HALF_UP)
+    product_id  = menu_item.product_id or 0
 
     item = OrderItem(
         order=order,
-        product_id=0,
+        product_id=product_id,
         product_name=menu_item.name,
         price_list=price_list,
         quantity=qty,
