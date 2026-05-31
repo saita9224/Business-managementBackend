@@ -2,9 +2,11 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 
-from .services import add_menu_order_item
+from .models import Receipt
+from .services import add_menu_order_item, delete_draft_receipt
 
 
 class POSMenuOrderItemTests(SimpleTestCase):
@@ -70,3 +72,74 @@ class POSMenuOrderItemTests(SimpleTestCase):
         )
 
         self.assertEqual(item.product_id, 0)
+
+
+class POSDeleteDraftReceiptTests(SimpleTestCase):
+    @patch("POS.services.CreditAccount")
+    @patch("POS.services.Receipt.objects")
+    def test_delete_draft_receipt_deletes_safe_draft(
+        self,
+        receipt_objects,
+        credit_account_cls,
+    ):
+        receipt = SimpleNamespace(
+            created_by_id=1,
+            status=Receipt.DRAFT,
+            submitted_at=None,
+            payments=SimpleNamespace(exists=Mock(return_value=False)),
+            delete=Mock(),
+        )
+        receipt_objects.select_for_update.return_value.get.return_value = receipt
+        credit_account_cls.objects.filter.return_value.exists.return_value = False
+
+        result = delete_draft_receipt.__wrapped__(
+            receipt_id=10,
+            deleted_by=SimpleNamespace(id=1, is_superuser=False),
+        )
+
+        self.assertTrue(result)
+        receipt.delete.assert_called_once_with()
+
+    @patch("POS.services.CreditAccount")
+    @patch("POS.services.Receipt.objects")
+    def test_delete_draft_receipt_rejects_non_draft(
+        self,
+        receipt_objects,
+        credit_account_cls,
+    ):
+        receipt = SimpleNamespace(
+            created_by_id=1,
+            status=Receipt.PENDING,
+            submitted_at=None,
+            payments=SimpleNamespace(exists=Mock(return_value=False)),
+            delete=Mock(),
+        )
+        receipt_objects.select_for_update.return_value.get.return_value = receipt
+        credit_account_cls.objects.filter.return_value.exists.return_value = False
+
+        with self.assertRaisesMessage(ValidationError, "Only draft receipts"):
+            delete_draft_receipt.__wrapped__(
+                receipt_id=10,
+                deleted_by=SimpleNamespace(id=1, is_superuser=False),
+            )
+
+        receipt.delete.assert_not_called()
+
+    @patch("POS.services.Receipt.objects")
+    def test_delete_draft_receipt_rejects_other_users_draft(self, receipt_objects):
+        receipt = SimpleNamespace(
+            created_by_id=1,
+            status=Receipt.DRAFT,
+            submitted_at=None,
+            payments=SimpleNamespace(exists=Mock(return_value=False)),
+            delete=Mock(),
+        )
+        receipt_objects.select_for_update.return_value.get.return_value = receipt
+
+        with self.assertRaisesMessage(ValidationError, "your own draft"):
+            delete_draft_receipt.__wrapped__(
+                receipt_id=10,
+                deleted_by=SimpleNamespace(id=2, is_superuser=False),
+            )
+
+        receipt.delete.assert_not_called()

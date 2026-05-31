@@ -130,6 +130,33 @@ def create_receipt(
     return receipt
 
 
+@transaction.atomic
+def delete_draft_receipt(
+    *,
+    receipt_id: int,
+    deleted_by: Employee,
+) -> bool:
+    receipt = Receipt.objects.select_for_update().get(pk=receipt_id)
+
+    if receipt.created_by_id != deleted_by.id and not deleted_by.is_superuser:
+        raise ValidationError("You can only delete your own draft receipts.")
+
+    if receipt.status != Receipt.DRAFT:
+        raise ValidationError("Only draft receipts can be deleted.")
+
+    if receipt.submitted_at is not None:
+        raise ValidationError("Submitted receipts cannot be deleted.")
+
+    if receipt.payments.exists():
+        raise ValidationError("Receipts with payments cannot be deleted.")
+
+    if CreditAccount.objects.filter(receipt=receipt).exists():
+        raise ValidationError("Receipts with credit accounts cannot be deleted.")
+
+    receipt.delete()
+    return True
+
+
 # =============================== ORDERS ===============================
 
 @transaction.atomic

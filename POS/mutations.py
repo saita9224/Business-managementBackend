@@ -16,6 +16,7 @@ from .services import (
     open_pos_session,
     close_pos_session,
     create_receipt          as svc_create_receipt,
+    delete_draft_receipt    as svc_delete_draft_receipt,
     create_order            as svc_create_order,
     add_order_item          as svc_add_order_item,
     add_menu_order_item     as svc_add_menu_order_item,
@@ -199,6 +200,22 @@ class POSMutation:
             raise GraphQLError(str(e))
 
     # ── ORDER ────────────────────────────────────────────
+
+    @strawberry.mutation
+    @permission_required("pos.create_order")
+    async def delete_draft_receipt(
+        self, info: Info, receipt_id: strawberry.ID
+    ) -> bool:
+        user = info.context.user
+        try:
+            return await sync_to_async(svc_delete_draft_receipt)(
+                receipt_id=int(receipt_id),
+                deleted_by=user,
+            )
+        except Receipt.DoesNotExist:
+            raise GraphQLError("Receipt not found.")
+        except Exception as e:
+            raise GraphQLError(str(e))
 
     @strawberry.mutation
     @permission_required("pos.create_order")
