@@ -1,5 +1,3 @@
-# POS/mutations.py
-
 from typing import Optional
 from datetime import date
 
@@ -125,6 +123,7 @@ class CreateMenuItemInput:
     name:       str
     emoji:      str
     price:      float
+    category:   str  = "other"
     is_pinned:  bool = False
     product_id: Optional[strawberry.ID] = None
 
@@ -135,6 +134,7 @@ class UpdateMenuItemInput:
     name:         Optional[str]   = None
     emoji:        Optional[str]   = None
     price:        Optional[float] = None
+    category:     Optional[str]   = None
     is_pinned:    Optional[bool]  = None
     is_available: Optional[bool]  = None
 
@@ -239,7 +239,6 @@ class POSMutation:
     async def add_order_item(
         self, info: Info, input: AddOrderItemInput
     ) -> OrderItemType:
-        """Adds an inventory-linked product to an order."""
         user = info.context.user
         try:
             order   = await sync_to_async(
@@ -247,7 +246,6 @@ class POSMutation:
             )(pk=int(input.order_id))
             product = await sync_to_async(Product.objects.get)(pk=int(input.product_id))
 
-            # Check if this product has a MenuItem so we can link it
             menu_item = await sync_to_async(
                 lambda: getattr(product, "menu_item", None)
             )()
@@ -273,7 +271,6 @@ class POSMutation:
     async def add_menu_order_item(
         self, info: Info, input: AddMenuOrderItemInput
     ) -> OrderItemType:
-        """Adds a manual menu item (no inventory product) to an order."""
         user = info.context.user
         try:
             order     = await sync_to_async(
@@ -426,6 +423,7 @@ class POSMutation:
                 name=input.name,
                 emoji=input.emoji,
                 price=input.price,
+                category=input.category,
                 is_pinned=input.is_pinned,
                 product_id=int(input.product_id) if input.product_id else None,
             )
@@ -443,6 +441,7 @@ class POSMutation:
                 name=input.name,
                 emoji=input.emoji,
                 price=float(input.price) if input.price is not None else None,
+                category=input.category,
                 is_pinned=input.is_pinned,
                 is_available=input.is_available,
             )

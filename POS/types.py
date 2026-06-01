@@ -1,5 +1,3 @@
-# POS/types.py
-
 from typing import List, Optional
 from datetime import datetime, date
 from decimal import Decimal
@@ -31,13 +29,14 @@ class UnpricedProductType:
 
 @strawberry.type
 class MenuItemType:
-    id: strawberry.ID
-    name: str
-    emoji: str
-    price: Decimal
+    id:           strawberry.ID
+    name:         str
+    emoji:        str
+    price:        Decimal
     is_available: bool
-    is_pinned: bool
-    product_id: Optional[strawberry.ID]
+    is_pinned:    bool
+    category:     str
+    product_id:   Optional[strawberry.ID]
 
     @strawberry.field
     def has_inventory(self) -> bool:

@@ -1,5 +1,3 @@
-# POS/services.py
-
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
 from django.core.exceptions import ValidationError
@@ -23,14 +21,8 @@ from .models import (
     MenuItem,
 )
 
-# ── Shared precision constant ─────────────────────────────
 TWO = Decimal("0.01")
 
-
-# ── Internal helper: ensure default PriceList exists ─────
-# Called before any sale operation that needs a PriceList FK.
-# Auto-creates the default list so the POS works out of the
-# box without manual setup.
 
 def _get_or_create_default_price_list():
     from .models import PriceList
@@ -41,17 +33,7 @@ def _get_or_create_default_price_list():
     return price_list
 
 
-# ── Internal helper: sync MenuItem.price → PriceListItem ──
-# Called whenever an inventory-linked MenuItem is created or
-# its price is updated. Keeps PriceListItem in sync so that
-# listed_price on OrderItem always reflects the official price.
-
 def _sync_price_list_item(menu_item: MenuItem) -> None:
-    """
-    Creates or updates the PriceListItem for the product linked to
-    this MenuItem in the default PriceList.
-    No-op if the MenuItem has no product link.
-    """
     if menu_item.product_id is None:
         return
 
@@ -182,26 +164,6 @@ def add_order_item(
     price_override_reason: str | None = None,
     menu_item: MenuItem | None = None,
 ) -> OrderItem:
-    """
-    Adds an inventory-linked product to an order.
-
-    Price resolution order:
-    1. Look up PriceListItem for this product in the default PriceList.
-       If found → listed_price = PriceListItem.selling_price
-    2. If not found → listed_price = final_price (no override)
-
-    The default PriceList is auto-created if it doesn't exist yet,
-    so no manual setup is required before the first sale.
-
-    Since _sync_price_list_item is called whenever a MenuItem is
-    created or updated, PriceListItem will always exist for any
-    inventory-linked menu item that has been priced by staff.
-    So in practice listed_price = MenuItem.price = final_price
-    and price_overridden = False for all normal sales.
-
-    Price override is only triggered if a waiter manually passes
-    a different final_price than what's in the PriceList.
-    """
     if quantity <= 0:
         raise ValidationError("Quantity must be greater than zero.")
 
@@ -210,10 +172,8 @@ def add_order_item(
 
     from .models import PriceListItem
 
-    # Auto-create default price list if missing — no manual setup required
     price_list = _get_or_create_default_price_list()
 
-    # Look up whether this product has an official price entry
     try:
         price_list_item = PriceListItem.objects.get(
             price_list=price_list,
@@ -221,8 +181,6 @@ def add_order_item(
         )
         listed_price = price_list_item.selling_price.quantize(TWO, rounding=ROUND_HALF_UP)
     except PriceListItem.DoesNotExist:
-        # No price entry yet — treat final_price as the official price.
-        # Happens for products not yet priced via the Menu Manager.
         listed_price = final_price
 
     price_overridden = final_price != listed_price
@@ -259,19 +217,10 @@ def add_menu_order_item(
     quantity: float,
     sold_by: Employee,
 ) -> OrderItem:
-    """
-    Adds a menu item to an order.
-    Inventory-linked menu items keep their product_id so submit_order can
-    apply the product's auto_deduct_on_sale rule. Manual menu items store
-    product_id=0 as the no-inventory sentinel.
-    The default PriceList is auto-created if it doesn't exist yet.
-    """
     if quantity <= 0:
         raise ValidationError("Quantity must be greater than zero.")
 
-    # Auto-create default price list if missing
-    price_list = _get_or_create_default_price_list()
-
+    price_list  = _get_or_create_default_price_list()
     final_price = menu_item.price.quantize(TWO, rounding=ROUND_HALF_UP)
     qty         = Decimal(str(quantity)).quantize(TWO, rounding=ROUND_HALF_UP)
     line_total  = (final_price * qty).quantize(TWO, rounding=ROUND_HALF_UP)
@@ -305,21 +254,12 @@ def submit_order(
     performed_by: Employee,
     emit_stock: bool = True,
 ) -> Receipt:
-    """
-    Waiter submits a DRAFT receipt → PENDING.
-    - Calculates subtotal/total from all orders that have items.
-    - Attempts stock deduction per inventory-linked item inside savepoints.
-    - Manual menu items (product_id=0) skip stock deduction.
-    - Stock failure never blocks submission.
-    """
 
     if receipt.status != Receipt.DRAFT:
         raise ValidationError(
             f"Only DRAFT receipts can be submitted. Current status: {receipt.status}"
         )
 
-    # Re-fetch orders fresh — bypasses stale ORM instance cache
-    # from before createOrder/addOrderItem were called.
     all_orders = list(
         Order.objects
         .filter(receipt_id=receipt.pk)
@@ -327,8 +267,6 @@ def submit_order(
         .order_by("-created_at")
     )
 
-    # Only process orders that have items — previous recalled orders
-    # (empty after recall) are kept for audit but excluded from totals.
     orders = [o for o in all_orders if o.items.all().count() > 0]
 
     if not orders:
@@ -342,7 +280,6 @@ def submit_order(
                 TWO, rounding=ROUND_HALF_UP
             )
 
-            # Skip stock deduction for manual menu items (sentinel product_id = 0)
             if item.product_id == 0:
                 continue
 
@@ -589,15 +526,21 @@ def create_menu_item(
     name: str,
     emoji: str,
     price: Decimal | float | str,
+    category: str = MenuItem.OTHER,
     is_pinned: bool = False,
     product_id: int | None = None,
 ) -> MenuItem:
     """
-    Creates a MenuItem. If product_id is given, links to that inventory
-    product and syncs the price into the default PriceList so that
-    add_order_item finds a matching PriceListItem and records the
-    correct listed_price with no override flag.
+    Creates a MenuItem. category must be one of MenuItem.CATEGORY_CHOICES.
+    If product_id is given, links to that inventory product and syncs
+    the price into the default PriceList.
     """
+    if category not in {MenuItem.FOOD, MenuItem.DRINKS, MenuItem.SNACKS, MenuItem.OTHER}:
+        raise ValidationError(
+            f"Invalid category '{category}'. "
+            f"Must be one of: food, drinks, snacks, other."
+        )
+
     if product_id:
         try:
             product = InventoryProduct.objects.get(pk=product_id)
@@ -612,13 +555,13 @@ def create_menu_item(
         name=name,
         emoji=emoji,
         price=Decimal(str(price)).quantize(TWO, rounding=ROUND_HALF_UP),
+        category=category,
         is_pinned=is_pinned,
         product=product,
     )
     item.full_clean()
     item.save()
 
-    # Sync price into PriceListItem so listed_price is correct at sale time
     _sync_price_list_item(item)
 
     return item
@@ -630,14 +573,23 @@ def update_menu_item(
     name: str | None = None,
     emoji: str | None = None,
     price: Decimal | float | str | None = None,
+    category: str | None = None,
     is_pinned: bool | None = None,
     is_available: bool | None = None,
 ) -> MenuItem:
     """
-    Updates a MenuItem. If price changes, syncs the new price into
-    the default PriceListItem so future sales reflect the updated price.
+    Updates a MenuItem. If category is supplied it must be a valid choice.
+    If price changes, syncs the new price into the default PriceListItem.
     """
     item = get_object_or_404(MenuItem, pk=item_id)
+
+    if category is not None:
+        if category not in {MenuItem.FOOD, MenuItem.DRINKS, MenuItem.SNACKS, MenuItem.OTHER}:
+            raise ValidationError(
+                f"Invalid category '{category}'. "
+                f"Must be one of: food, drinks, snacks, other."
+            )
+        item.category = category
 
     if name         is not None: item.name         = name
     if emoji        is not None: item.emoji        = emoji
@@ -648,18 +600,12 @@ def update_menu_item(
     item.full_clean()
     item.save()
 
-    # Re-sync price into PriceListItem whenever anything changes
     _sync_price_list_item(item)
 
     return item
 
 
 def delete_menu_item(*, item_id: int) -> bool:
-    """
-    Deletes a manual menu item.
-    Inventory-linked items cannot be deleted — mark unavailable instead.
-    Does NOT delete the PriceListItem — historical price data is preserved.
-    """
     item = get_object_or_404(MenuItem, pk=item_id)
     if item.product is not None:
         raise ValidationError(
@@ -671,12 +617,6 @@ def delete_menu_item(*, item_id: int) -> bool:
 
 
 def get_menu_with_frequency(limit: int = 8) -> list:
-    """
-    Returns all available menu items with price > 0, annotated with
-    order frequency, sorted by pin status then frequency.
-    Zero-priced items are excluded — they appear in unpricedInventoryItems
-    instead and won't show on the waiter's menu until priced.
-    """
     from django.db.models import Count
     items = (
         MenuItem.objects

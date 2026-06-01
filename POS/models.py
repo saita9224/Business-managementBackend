@@ -1,5 +1,3 @@
-# POS/models.py
-
 from django.db import models
 from django.utils import timezone
 from employees.models import Employee
@@ -123,8 +121,6 @@ class OrderItem(models.Model):
         on_delete=models.CASCADE,
         related_name="items"
     )
-    # product_id = 0 is used as a sentinel for manual menu items
-    # that have no inventory product linked.
     product_id   = models.IntegerField()
     product_name = models.CharField(max_length=150)
     price_list   = models.ForeignKey(PriceList, on_delete=models.PROTECT)
@@ -150,9 +146,6 @@ class OrderItem(models.Model):
         related_name="sold_items"
     )
 
-    # Optional link to the MenuItem that originated this item.
-    # Set for both inventory-linked and manual menu items.
-    # Null only for legacy items created before MenuItem existed.
     menu_item = models.ForeignKey(
         "MenuItem",
         on_delete=models.SET_NULL,
@@ -246,12 +239,32 @@ class MenuItem(models.Model):
     - Inventory-linked (product set): stock IS deducted on sale.
     - Manual (product None): no inventory linkage, no stock deduction.
     is_pinned=True items always appear first in the frequent items row.
+    category is set explicitly by staff via the Menu Manager — no
+    name inference. Defaults to OTHER until staff categorise the item.
     """
+
+    FOOD    = "food"
+    DRINKS  = "drinks"
+    SNACKS  = "snacks"
+    OTHER   = "other"
+
+    CATEGORY_CHOICES = [
+        (FOOD,   "Food"),
+        (DRINKS, "Drinks"),
+        (SNACKS, "Snacks"),
+        (OTHER,  "Other"),
+    ]
+
     name         = models.CharField(max_length=150)
     emoji        = models.CharField(max_length=10, default="🛒")
     price        = models.DecimalField(max_digits=12, decimal_places=2)
     is_available = models.BooleanField(default=True)
     is_pinned    = models.BooleanField(default=False)
+    category     = models.CharField(
+        max_length=20,
+        choices=CATEGORY_CHOICES,
+        default=OTHER,
+    )
 
     product = models.OneToOneField(
         "inventory.Product",
