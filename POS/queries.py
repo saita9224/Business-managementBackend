@@ -17,6 +17,7 @@ from .types import (
     MenuItemType,
     CreditAccountType,
     UnpricedProductType,
+    MenuCategoryType,
 )
 
 RECEIPT_SELECT = [
@@ -223,8 +224,6 @@ class POSQuery:
         return await sync_to_async(fetch)()
 
     # ── MENU ─────────────────────────────────────────────
-    # sync_inventory_to_menu removed — items are now explicitly
-    # priced and added by staff via the Menu Manager.
 
     @strawberry.field
     @permission_required("pos.view_orders")
@@ -251,6 +250,41 @@ class POSQuery:
             )
         return await sync_to_async(fetch)()
 
+    # ── MENU CATEGORIES ───────────────────────────────────
+
+    @strawberry.field
+    @permission_required("pos.view_orders")
+    async def menu_categories(self, info: Info) -> List[MenuCategoryType]:
+        """
+        Returns the fixed set of menu categories defined on MenuItem.
+        Used by the Menu Manager to render the category picker without
+        hardcoding choices on the frontend. The counts reflect currently
+        available, priced items only — same population as menu_items.
+        """
+        def fetch():
+            from django.db.models import Count, Q
+
+            # Annotate each category value with how many available,
+            # priced menu items currently carry it.
+            rows = (
+                MenuItem.objects
+                .filter(is_available=True, price__gt=Decimal("0.00"))
+                .values("category")
+                .annotate(count=Count("id"))
+            )
+            return {row["category"]: row["count"] for row in rows}
+
+        counts = await sync_to_async(fetch)()
+
+        return [
+            MenuCategoryType(
+                key=key,
+                label=label,
+                count=counts.get(key, 0),
+            )
+            for key, label in MenuItem.CATEGORY_CHOICES
+        ]
+
     # ── UNPRICED INVENTORY ITEMS ──────────────────────────
 
     @strawberry.field
@@ -267,14 +301,12 @@ class POSQuery:
         def fetch():
             from inventory.models import Product as InvProduct
 
-            # Products with no MenuItem at all
             no_menu = list(
                 InvProduct.objects
                 .filter(auto_deduct_on_sale=True, menu_item__isnull=True)
                 .values("id", "name", "unit")
             )
 
-            # Products with a MenuItem but still priced at 0
             zero_price = list(
                 InvProduct.objects
                 .filter(
@@ -284,7 +316,6 @@ class POSQuery:
                 .values("id", "name", "unit")
             )
 
-            # Merge and deduplicate
             seen, results = set(), []
             for p in no_menu + zero_price:
                 if p["id"] not in seen:

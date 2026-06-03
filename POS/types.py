@@ -1,3 +1,5 @@
+# POS/types.py
+
 from typing import List, Optional
 from datetime import datetime, date
 from decimal import Decimal
@@ -25,6 +27,18 @@ class UnpricedProductType:
     product_id:   strawberry.ID
     product_name: str
     unit:         str
+
+
+@strawberry.type
+class MenuCategoryType:
+    """
+    A single menu category choice as defined on MenuItem.CATEGORY_CHOICES.
+    count reflects available, priced items in that category — used by
+    the Menu Manager category picker and by the waiter POS category pills.
+    """
+    key:   str
+    label: str
+    count: int
 
 
 @strawberry.type
