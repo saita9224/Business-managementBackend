@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.text import slugify
 
 from employees.models import Employee
 from inventory.models import Product, StockMovement
@@ -18,10 +19,67 @@ from .models import (
     Payment,
     CreditAccount,
     POSStockMovement,
+    MenuCategory,
     MenuItem,
 )
 
 TWO = Decimal("0.01")
+
+DEFAULT_MENU_CATEGORIES = [
+    (MenuItem.FOOD, "Food"),
+    (MenuItem.DRINKS, "Drinks"),
+    (MenuItem.SNACKS, "Snacks"),
+    (MenuItem.OTHER, "Other"),
+]
+
+
+def _normalize_category_key(value: str) -> str:
+    key = slugify((value or "").strip())[:80]
+    if not key:
+        raise ValidationError("Category name is required.")
+    return key
+
+
+def _label_from_category(value: str) -> str:
+    return " ".join(part.capitalize() for part in value.replace("-", " ").split())
+
+
+def ensure_default_menu_categories() -> None:
+    for key, label in DEFAULT_MENU_CATEGORIES:
+        MenuCategory.objects.get_or_create(
+            key=key,
+            defaults={"label": label},
+        )
+
+
+def create_menu_category(*, name: str) -> MenuCategory:
+    label = (name or "").strip()
+    key = _normalize_category_key(label)
+    if not label:
+        raise ValidationError("Category name is required.")
+
+    category, _ = MenuCategory.objects.get_or_create(
+        key=key,
+        defaults={"label": label[:100]},
+    )
+    return category
+
+
+def resolve_menu_category(value: str | None) -> MenuCategory:
+    ensure_default_menu_categories()
+    raw = value or MenuItem.OTHER
+    key = _normalize_category_key(raw)
+
+    category = MenuCategory.objects.filter(key=key).first()
+    if category:
+        return category
+
+    label = _label_from_category(key)
+    category, _ = MenuCategory.objects.get_or_create(
+        key=key,
+        defaults={"label": label[:100]},
+    )
+    return category
 
 
 def _get_or_create_default_price_list():
@@ -531,15 +589,10 @@ def create_menu_item(
     product_id: int | None = None,
 ) -> MenuItem:
     """
-    Creates a MenuItem. category must be one of MenuItem.CATEGORY_CHOICES.
-    If product_id is given, links to that inventory product and syncs
-    the price into the default PriceList.
+    Creates a MenuItem. If product_id is given, links to that inventory
+    product and syncs the price into the default PriceList.
     """
-    if category not in {MenuItem.FOOD, MenuItem.DRINKS, MenuItem.SNACKS, MenuItem.OTHER}:
-        raise ValidationError(
-            f"Invalid category '{category}'. "
-            f"Must be one of: food, drinks, snacks, other."
-        )
+    menu_category = resolve_menu_category(category)
 
     if product_id:
         try:
@@ -555,7 +608,7 @@ def create_menu_item(
         name=name,
         emoji=emoji,
         price=Decimal(str(price)).quantize(TWO, rounding=ROUND_HALF_UP),
-        category=category,
+        category=menu_category.key,
         is_pinned=is_pinned,
         product=product,
     )
@@ -578,18 +631,13 @@ def update_menu_item(
     is_available: bool | None = None,
 ) -> MenuItem:
     """
-    Updates a MenuItem. If category is supplied it must be a valid choice.
-    If price changes, syncs the new price into the default PriceListItem.
+    Updates a MenuItem. If price changes, syncs the new price into the
+    default PriceListItem.
     """
     item = get_object_or_404(MenuItem, pk=item_id)
 
     if category is not None:
-        if category not in {MenuItem.FOOD, MenuItem.DRINKS, MenuItem.SNACKS, MenuItem.OTHER}:
-            raise ValidationError(
-                f"Invalid category '{category}'. "
-                f"Must be one of: food, drinks, snacks, other."
-            )
-        item.category = category
+        item.category = resolve_menu_category(category).key
 
     if name         is not None: item.name         = name
     if emoji        is not None: item.emoji        = emoji

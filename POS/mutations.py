@@ -24,6 +24,7 @@ from .services import (
     create_credit_account   as svc_create_credit,
     settle_credit           as svc_settle_credit,
     refund_receipt          as svc_refund_receipt,
+    create_menu_category    as svc_create_menu_category,
     create_menu_item        as svc_create_menu_item,
     update_menu_item        as svc_update_menu_item,
     delete_menu_item        as svc_delete_menu_item,
@@ -35,6 +36,7 @@ from .types import (
     OrderItemType,
     PaymentType,
     CreditAccountType,
+    MenuCategoryType,
     MenuItemType,
 )
 
@@ -116,6 +118,11 @@ class SettleCreditInput:
 class RefundReceiptInput:
     receipt_id: strawberry.ID
     reason:     str
+
+
+@strawberry.input
+class CreateMenuCategoryInput:
+    name: str
 
 
 @strawberry.input
@@ -412,6 +419,21 @@ class POSMutation:
             raise GraphQLError(str(e))
 
     # ── MENU ─────────────────────────────────────────────
+
+    @strawberry.mutation
+    @permission_required("pos.manage_menu")
+    async def create_menu_category(
+        self, info: Info, input: CreateMenuCategoryInput
+    ) -> MenuCategoryType:
+        try:
+            category = await sync_to_async(svc_create_menu_category)(name=input.name)
+            return MenuCategoryType(
+                key=category.key,
+                label=category.label,
+                count=0,
+            )
+        except Exception as e:
+            raise GraphQLError(str(e))
 
     @strawberry.mutation
     @permission_required("pos.manage_menu")

@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from django.utils.text import slugify
 from employees.models import Employee
 
 
@@ -233,6 +234,28 @@ class POSStockMovement(models.Model):
         return f"Stock OUT {self.product.name} ({self.quantity})"
 
 
+class MenuCategory(models.Model):
+    """
+    Business-defined POS menu category.
+    The key is stable for filters/API use; label is the display name.
+    """
+
+    key        = models.SlugField(max_length=80, unique=True)
+    label      = models.CharField(max_length=100, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["label"]
+
+    def save(self, *args, **kwargs):
+        if not self.key:
+            self.key = slugify(self.label or "")[:80]
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.label
+
+
 class MenuItem(models.Model):
     """
     Represents an item on the business menu.
@@ -248,21 +271,13 @@ class MenuItem(models.Model):
     SNACKS  = "snacks"
     OTHER   = "other"
 
-    CATEGORY_CHOICES = [
-        (FOOD,   "Food"),
-        (DRINKS, "Drinks"),
-        (SNACKS, "Snacks"),
-        (OTHER,  "Other"),
-    ]
-
     name         = models.CharField(max_length=150)
     emoji        = models.CharField(max_length=10, default="🛒")
     price        = models.DecimalField(max_digits=12, decimal_places=2)
     is_available = models.BooleanField(default=True)
     is_pinned    = models.BooleanField(default=False)
     category     = models.CharField(
-        max_length=20,
-        choices=CATEGORY_CHOICES,
+        max_length=80,
         default=OTHER,
     )
 

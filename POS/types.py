@@ -32,7 +32,7 @@ class UnpricedProductType:
 @strawberry.type
 class MenuCategoryType:
     """
-    A single menu category choice as defined on MenuItem.CATEGORY_CHOICES.
+    A business-defined menu category.
     count reflects available, priced items in that category — used by
     the Menu Manager category picker and by the waiter POS category pills.
     """

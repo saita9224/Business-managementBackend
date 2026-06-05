@@ -9,8 +9,8 @@ from asgiref.sync import sync_to_async
 
 from employees.decorators import permission_required
 
-from .models import POSSession, Receipt, MenuItem, CreditAccount
-from .services import get_menu_with_frequency
+from .models import POSSession, Receipt, MenuItem, MenuCategory, CreditAccount
+from .services import ensure_default_menu_categories, get_menu_with_frequency
 from .types import (
     POSSessionType,
     ReceiptType,
@@ -262,28 +262,35 @@ class POSQuery:
         available, priced items only — same population as menu_items.
         """
         def fetch():
-            from django.db.models import Count, Q
+            from django.db.models import Count
 
-            # Annotate each category value with how many available,
-            # priced menu items currently carry it.
+            ensure_default_menu_categories()
             rows = (
                 MenuItem.objects
                 .filter(is_available=True, price__gt=Decimal("0.00"))
                 .values("category")
                 .annotate(count=Count("id"))
             )
-            return {row["category"]: row["count"] for row in rows}
+            counts = {row["category"]: row["count"] for row in rows}
+            categories = list(MenuCategory.objects.all())
+            known = {category.key for category in categories}
 
-        counts = await sync_to_async(fetch)()
+            for key in sorted(set(counts) - known):
+                label = " ".join(
+                    part.capitalize() for part in key.replace("-", " ").split()
+                )
+                categories.append(MenuCategory.objects.create(key=key, label=label))
 
-        return [
-            MenuCategoryType(
-                key=key,
-                label=label,
-                count=counts.get(key, 0),
-            )
-            for key, label in MenuItem.CATEGORY_CHOICES
-        ]
+            return [
+                MenuCategoryType(
+                    key=category.key,
+                    label=category.label,
+                    count=counts.get(category.key, 0),
+                )
+                for category in sorted(categories, key=lambda item: item.label.lower())
+            ]
+
+        return await sync_to_async(fetch)()
 
     # ── UNPRICED INVENTORY ITEMS ──────────────────────────
 
