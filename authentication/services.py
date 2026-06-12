@@ -1,23 +1,5 @@
 # authentication/services.py
 
-"""
-JWT creation and decoding, plus all business logic:
-
-  - find_existing_google_user()
-  - create_new_tenant_and_admin()
-  - find_employee_by_email()
-  - build_auth_payload()
-  - create_pending_registration()
-  - verify_pending_registration()
-  - complete_pending_registration()
-  - create_super_admin_jwt()
-  - decode_super_admin_jwt()
-
-PendingRegistration lives in tenants.models (a pure SHARED_APP)
-so its table is guaranteed to exist in the public schema.
-generate_pin() stays in authentication.models and is imported from there.
-"""
-
 import re
 import jwt
 import logging
@@ -35,18 +17,11 @@ ALGORITHM            = getattr(settings, "JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRES = getattr(settings, "JWT_ACCESS_EXPIRES_SECONDS", 3600)
 
 
-# ======================================================
-# EMPLOYEE JWT
-# ======================================================
-
 def create_jwt_token(
     employee,
     schema_name: str,
     expires_in: int = ACCESS_TOKEN_EXPIRES,
 ) -> str:
-    """
-    Create a signed JWT for an employee.
-    """
     now = timezone.now()
 
     payload = {
@@ -66,13 +41,6 @@ def create_jwt_token(
 
 
 def _load_employee_from_schema(schema_name: str, user_id: int):
-    """
-    Synchronous helper that performs ALL tenant-scoped ORM work
-    inside schema_context.
-
-    Required because schema_context is thread-local and does not
-    survive async/sync thread boundaries.
-    """
     from employees.models import Employee
 
     with schema_context(schema_name):
@@ -80,24 +48,18 @@ def _load_employee_from_schema(schema_name: str, user_id: int):
 
 
 async def decode_jwt_token(token: str):
-    """
-    Decode an employee JWT and return the matching Employee,
-    or None on any failure.
-    """
     from jwt import ExpiredSignatureError, InvalidTokenError, DecodeError
 
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
 
         if payload.get("role") == "superadmin":
-            logger.debug("Employee decoder rejected superadmin token")
             return None
 
         user_id     = payload.get("user_id")
         schema_name = payload.get("schema_name")
 
         if not user_id or not schema_name:
-            logger.debug("JWT missing user_id or schema_name")
             return None
 
         employee = await sync_to_async(
@@ -110,25 +72,16 @@ async def decode_jwt_token(token: str):
         return employee
 
     except (ExpiredSignatureError, InvalidTokenError, DecodeError):
-        logger.debug("JWT decode failed — expired or invalid")
         return None
 
     except Exception:
-        logger.debug("JWT decode failed — employee not found or schema error")
         return None
 
-
-# ======================================================
-# SUPER ADMIN JWT
-# ======================================================
 
 def create_super_admin_jwt(
     admin,
     expires_in: int = ACCESS_TOKEN_EXPIRES,
 ) -> str:
-    """
-    Create a JWT for the SuperAdmin.
-    """
     now = timezone.now()
 
     payload = {
@@ -147,9 +100,6 @@ def create_super_admin_jwt(
 
 
 async def decode_super_admin_jwt(token: str):
-    """
-    Decode a SuperAdmin JWT.
-    """
     from jwt import ExpiredSignatureError, InvalidTokenError, DecodeError
     from tenants.models import SuperAdmin
 
@@ -157,7 +107,6 @@ async def decode_super_admin_jwt(token: str):
         payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
 
         if payload.get("role") != "superadmin":
-            logger.debug("Token rejected — not a superadmin token")
             return None
 
         admin_id = payload.get("super_admin_id")
@@ -173,26 +122,17 @@ async def decode_super_admin_jwt(token: str):
         return admin
 
     except (ExpiredSignatureError, InvalidTokenError, DecodeError):
-        logger.debug("SuperAdmin JWT decode failed — expired or invalid")
         return None
 
     except Exception:
-        logger.debug("SuperAdmin JWT decode failed — admin not found")
         return None
 
-
-# ======================================================
-# AUTH PAYLOAD
-# ======================================================
 
 def build_auth_payload(
     employee,
     schema_name: str,
     is_new_user: bool = False,
 ) -> dict:
-    """
-    Shared auth payload builder.
-    """
     token = create_jwt_token(employee, schema_name)
 
     roles = [role.name for role in employee.roles.all()]
@@ -215,14 +155,7 @@ def build_auth_payload(
     }
 
 
-# ======================================================
-# GOOGLE AUTH
-# ======================================================
-
 def find_existing_google_user(google_id: str, email: str):
-    """
-    Search every tenant schema for a Google user.
-    """
     from tenants.models import Business
     from employees.models import Employee, SocialAccount
 
@@ -230,20 +163,17 @@ def find_existing_google_user(google_id: str, email: str):
 
         with schema_context(tenant.schema_name):
 
-            # Stage 1 — SocialAccount lookup
             try:
                 account = (
                     SocialAccount.objects
                     .select_related("employee")
                     .get(provider="google", provider_id=google_id)
                 )
-
                 return account.employee, tenant.schema_name
 
             except SocialAccount.DoesNotExist:
                 pass
 
-            # Stage 2 — email fallback
             if email:
                 try:
                     employee = Employee.objects.get(
@@ -274,10 +204,6 @@ def find_existing_google_user(google_id: str, email: str):
     return None, None
 
 
-# ======================================================
-# TENANT CREATION
-# ======================================================
-
 def _slugify(text: str) -> str:
     slug = text.lower().strip()
     slug = re.sub(r"[^\w\s-]", "", slug)
@@ -307,9 +233,6 @@ def create_new_tenant_and_admin(
     business_name: str,
     set_unusable_password: bool = True,
 ) -> tuple:
-    """
-    Create a new tenant schema and admin employee.
-    """
     from tenants.models import Business, Domain
     from employees.models import Employee, Role, SocialAccount
     from django.db import transaction
@@ -321,7 +244,6 @@ def create_new_tenant_and_admin(
         schema_name=schema_name,
         name=business_name,
     )
-
     business.save()
 
     Domain.objects.create(
@@ -352,7 +274,6 @@ def create_new_tenant_and_admin(
                 employee.set_unusable_password()
 
             employee.save()
-
             employee.roles.add(admin_role)
 
             if user_info.get("provider_id"):
@@ -374,14 +295,7 @@ def create_new_tenant_and_admin(
     return employee, schema_name
 
 
-# ======================================================
-# EMAIL+PASSWORD LOGIN
-# ======================================================
-
 def find_employee_by_email(email: str):
-    """
-    Search every tenant schema for an Employee with this email.
-    """
     from tenants.models import Business
     from employees.models import Employee
 
@@ -395,7 +309,6 @@ def find_employee_by_email(email: str):
                     .prefetch_related("roles__permissions")
                     .get(email__iexact=email, is_active=True)
                 )
-
                 return employee, tenant.schema_name
 
             except Employee.DoesNotExist:
@@ -404,23 +317,13 @@ def find_employee_by_email(email: str):
     return None, None
 
 
-# ======================================================
-# PENDING REGISTRATION
-# ======================================================
-
 def create_pending_registration(email: str, business_name: str) -> str:
-    """
-    Create or replace a PendingRegistration.
-    """
     from tenants.models import PendingRegistration
     from authentication.models import generate_pin
 
     pin = generate_pin()
 
-    PendingRegistration.objects.filter(
-        email__iexact=email
-    ).delete()
-
+    PendingRegistration.objects.filter(email__iexact=email).delete()
     PendingRegistration.objects.create(
         email=email,
         business_name=business_name,
@@ -433,16 +336,10 @@ def create_pending_registration(email: str, business_name: str) -> str:
 
 
 def verify_pending_registration(email: str, pin: str):
-    """
-    Verify a pending registration PIN.
-    """
     from tenants.models import PendingRegistration
 
     try:
-        pending = PendingRegistration.objects.get(
-            email__iexact=email
-        )
-
+        pending = PendingRegistration.objects.get(email__iexact=email)
     except PendingRegistration.DoesNotExist:
         raise ValueError(
             "No pending registration found for this email. "
@@ -451,15 +348,10 @@ def verify_pending_registration(email: str, pin: str):
 
     if pending.is_expired:
         pending.delete()
-
-        raise ValueError(
-            "PIN has expired. Please request a new one."
-        )
+        raise ValueError("PIN has expired. Please request a new one.")
 
     if pending.pin != pin:
-        raise ValueError(
-            "Incorrect PIN. Please try again."
-        )
+        raise ValueError("Incorrect PIN. Please try again.")
 
     return pending
 
@@ -469,13 +361,6 @@ def complete_pending_registration(
     name: str,
     password: str,
 ) -> tuple:
-    """
-    Create tenant + admin, set credentials, reload with
-    roles/permissions, then delete pending registration.
-
-    All tenant-scoped ORM work happens synchronously inside
-    schema_context to avoid async/thread-local schema leakage.
-    """
     user_info = {
         "email":       pending.email,
         "name":        "",
@@ -493,7 +378,6 @@ def complete_pending_registration(
 
         employee.name = name
         employee.set_password(password)
-
         employee.save(update_fields=["name", "password"])
 
         employee = (
@@ -504,9 +388,72 @@ def complete_pending_registration(
 
     pending.delete()
 
-    logger.info(
-        "Completed pending registration for %s",
-        pending.email,
-    )
+    logger.info("Completed pending registration for %s", pending.email)
+
+    return employee, schema_name
+
+
+def create_password_reset_request(email: str) -> tuple:
+    from tenants.models import PasswordResetRequest
+    from authentication.models import generate_pin
+
+    employee, schema_name = find_employee_by_email(email)
+
+    if not employee:
+        raise ValueError("No active account found for this email.")
+
+    pin = generate_pin()
+
+    PasswordResetRequest.objects.filter(email__iexact=email).delete()
+    PasswordResetRequest.objects.create(email=email, pin=pin)
+
+    logger.info("Created password reset request for %s", email)
+
+    return employee, schema_name, pin
+
+
+def verify_password_reset_pin(email: str, pin: str):
+    from tenants.models import PasswordResetRequest
+
+    try:
+        request = PasswordResetRequest.objects.get(email__iexact=email)
+    except PasswordResetRequest.DoesNotExist:
+        raise ValueError(
+            "No password reset was requested for this email. "
+            "Please start again."
+        )
+
+    if request.is_expired:
+        request.delete()
+        raise ValueError("PIN has expired. Please request a new one.")
+
+    if request.pin != pin:
+        raise ValueError("Incorrect PIN. Please try again.")
+
+    return request
+
+
+def complete_password_reset(email: str, pin: str, new_password: str) -> tuple:
+    reset_request = verify_password_reset_pin(email, pin)
+
+    employee, schema_name = find_employee_by_email(email)
+
+    if not employee:
+        reset_request.delete()
+        raise ValueError("Account no longer exists.")
+
+    with schema_context(schema_name):
+        employee.set_password(new_password)
+        employee.save(update_fields=["password"])
+
+        employee = (
+            type(employee).objects
+            .prefetch_related("roles__permissions")
+            .get(pk=employee.pk)
+        )
+
+    reset_request.delete()
+
+    logger.info("Password reset completed for %s", email)
 
     return employee, schema_name

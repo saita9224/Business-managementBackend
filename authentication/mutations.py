@@ -11,14 +11,15 @@ from .services import (
     create_pending_registration,
     verify_pending_registration,
     complete_pending_registration,
+    create_password_reset_request,
+    complete_password_reset,
 )
 
-from .email_service import send_registration_pin
+from .email_service import (
+    send_registration_pin,
+    send_password_reset_pin,
+)
 
-
-# ======================================================
-# PAYLOAD TYPES
-# ======================================================
 
 @strawberry.type
 class LoginPayload:
@@ -50,16 +51,25 @@ class VerifyRegistrationPayload:
     is_new_user: bool
 
 
-# ======================================================
-# MUTATIONS
-# ======================================================
+@strawberry.type
+class RequestPasswordResetPayload:
+    message: str
+    email:   str
+
+
+@strawberry.type
+class ResetPasswordPayload:
+    token:       str
+    user_id:     int
+    name:        str
+    email:       str
+    roles:       list[str]
+    permissions: list[str]
+    schema_name: str
+
 
 @strawberry.type
 class AuthMutation:
-
-    # ==================================================
-    # LOGIN
-    # ==================================================
 
     @strawberry.mutation
     async def login(
@@ -90,10 +100,6 @@ class AuthMutation:
             schema_name=       data["schema_name"],
             is_email_verified= employee.is_email_verified,
         )
-
-    # ==================================================
-    # REQUEST REGISTRATION
-    # ==================================================
 
     @strawberry.mutation
     async def request_registration(
@@ -129,10 +135,6 @@ class AuthMutation:
             message="Verification PIN sent. Check your email.",
             email=email,
         )
-
-    # ==================================================
-    # VERIFY REGISTRATION
-    # ==================================================
 
     @strawberry.mutation
     async def verify_registration(
@@ -177,4 +179,59 @@ class AuthMutation:
             permissions= data["permissions"],
             schema_name= data["schema_name"],
             is_new_user= True,
+        )
+
+    @strawberry.mutation
+    async def request_password_reset(
+        self,
+        email: str,
+    ) -> RequestPasswordResetPayload:
+        try:
+            employee, schema_name, pin = await sync_to_async(
+                create_password_reset_request
+            )(email.strip().lower())
+
+            await sync_to_async(send_password_reset_pin)(
+                email=email.strip().lower(),
+                name=employee.name,
+                pin=pin,
+            )
+
+        except ValueError:
+            pass
+
+        return RequestPasswordResetPayload(
+            message="If an account exists for this email, a reset PIN has been sent.",
+            email=email.strip().lower(),
+        )
+
+    @strawberry.mutation
+    async def reset_password(
+        self,
+        email:        str,
+        pin:          str,
+        new_password: str,
+    ) -> ResetPasswordPayload:
+
+        try:
+            employee, schema_name = await sync_to_async(
+                complete_password_reset
+            )(
+                email.strip().lower(),
+                pin.strip(),
+                new_password,
+            )
+        except ValueError as exc:
+            raise GraphQLError(str(exc))
+
+        data = build_auth_payload(employee, schema_name)
+
+        return ResetPasswordPayload(
+            token=       data["token"],
+            user_id=     data["user_id"],
+            name=        data["name"],
+            email=       data["email"],
+            roles=       data["roles"],
+            permissions= data["permissions"],
+            schema_name= data["schema_name"],
         )
