@@ -6,6 +6,7 @@ import logging
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.utils import timezone
 from asgiref.sync import sync_to_async
 from django_tenants.utils import schema_context
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 JWT_SECRET           = getattr(settings, "JWT_SECRET", settings.SECRET_KEY)
 ALGORITHM            = getattr(settings, "JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRES = getattr(settings, "JWT_ACCESS_EXPIRES_SECONDS", 3600)
+MAX_PIN_ATTEMPTS     = getattr(settings, "AUTH_PIN_MAX_ATTEMPTS", 5)
 
 
 def create_jwt_token(
@@ -47,7 +49,10 @@ def _load_employee_from_schema(schema_name: str, user_id: int):
         return Employee.objects.get(id=user_id)
 
 
-async def decode_jwt_token(token: str):
+async def decode_jwt_token(
+    token: str,
+    expected_schema_name: str | None = None,
+):
     from jwt import ExpiredSignatureError, InvalidTokenError, DecodeError
 
     try:
@@ -60,6 +65,14 @@ async def decode_jwt_token(token: str):
         schema_name = payload.get("schema_name")
 
         if not user_id or not schema_name:
+            return None
+
+        if expected_schema_name and schema_name != expected_schema_name:
+            logger.warning(
+                "Rejected JWT for schema %s on schema %s",
+                schema_name,
+                expected_schema_name,
+            )
             return None
 
         employee = await sync_to_async(
@@ -135,13 +148,18 @@ def build_auth_payload(
 ) -> dict:
     token = create_jwt_token(employee, schema_name)
 
-    roles = [role.name for role in employee.roles.all()]
-
-    permissions = list({
-        perm.code
-        for role in employee.roles.all()
-        for perm in role.permissions.all()
-    })
+    with schema_context(schema_name):
+        employee = (
+            type(employee).objects
+            .prefetch_related("roles__permissions")
+            .get(pk=employee.pk)
+        )
+        roles = [role.name for role in employee.roles.all()]
+        permissions = list({
+            perm.code
+            for role in employee.roles.all()
+            for perm in role.permissions.all()
+        })
 
     return {
         "token":       token,
@@ -317,6 +335,42 @@ def find_employee_by_email(email: str):
     return None, None
 
 
+def find_employee_by_email_in_schema(email: str, schema_name: str):
+    from employees.models import Employee
+
+    if not schema_name or schema_name == "public":
+        return None
+
+    with schema_context(schema_name):
+        try:
+            return (
+                Employee.objects
+                .prefetch_related("roles__permissions")
+                .get(email__iexact=email, is_active=True)
+            )
+        except Employee.DoesNotExist:
+            return None
+
+
+def _hash_pin(pin: str) -> str:
+    return make_password(pin)
+
+
+def _check_pin(stored_pin: str, raw_pin: str) -> bool:
+    if len(stored_pin) == 6 and stored_pin.isdigit():
+        return stored_pin == raw_pin
+    return check_password(raw_pin, stored_pin)
+
+
+def _increment_pin_attempts(record):
+    record.attempts += 1
+    update_fields = ["attempts"]
+    if record.attempts >= MAX_PIN_ATTEMPTS:
+        record.delete()
+        return
+    record.save(update_fields=update_fields)
+
+
 def create_pending_registration(email: str, business_name: str) -> str:
     from tenants.models import PendingRegistration
     from authentication.models import generate_pin
@@ -327,7 +381,7 @@ def create_pending_registration(email: str, business_name: str) -> str:
     PendingRegistration.objects.create(
         email=email,
         business_name=business_name,
-        pin=pin,
+        pin=_hash_pin(pin),
     )
 
     logger.info("Created pending registration for %s", email)
@@ -350,7 +404,12 @@ def verify_pending_registration(email: str, pin: str):
         pending.delete()
         raise ValueError("PIN has expired. Please request a new one.")
 
-    if pending.pin != pin:
+    if pending.attempts >= MAX_PIN_ATTEMPTS:
+        pending.delete()
+        raise ValueError("Too many incorrect attempts. Please request a new PIN.")
+
+    if not _check_pin(pending.pin, pin):
+        _increment_pin_attempts(pending)
         raise ValueError("Incorrect PIN. Please try again.")
 
     return pending
@@ -405,7 +464,7 @@ def create_password_reset_request(email: str) -> tuple:
     pin = generate_pin()
 
     PasswordResetRequest.objects.filter(email__iexact=email).delete()
-    PasswordResetRequest.objects.create(email=email, pin=pin)
+    PasswordResetRequest.objects.create(email=email, pin=_hash_pin(pin))
 
     logger.info("Created password reset request for %s", email)
 
@@ -427,7 +486,12 @@ def verify_password_reset_pin(email: str, pin: str):
         request.delete()
         raise ValueError("PIN has expired. Please request a new one.")
 
-    if request.pin != pin:
+    if request.attempts >= MAX_PIN_ATTEMPTS:
+        request.delete()
+        raise ValueError("Too many incorrect attempts. Please request a new PIN.")
+
+    if not _check_pin(request.pin, pin):
+        _increment_pin_attempts(request)
         raise ValueError("Incorrect PIN. Please try again.")
 
     return request

@@ -2,6 +2,7 @@
 
 import logging
 from strawberry.extensions import SchemaExtension
+from django.db import connection
 from authentication.services import decode_jwt_token
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,18 @@ class JWTMiddleware(SchemaExtension):
                     prefix, token = parts
 
                     if prefix.lower() == "bearer":
-                        user = await decode_jwt_token(token)
+                        tenant = getattr(request, "tenant", None)
+                        expected_schema_name = (
+                            getattr(tenant, "schema_name", None)
+                            or getattr(connection, "schema_name", None)
+                        )
+                        if expected_schema_name == "public":
+                            expected_schema_name = None
+
+                        user = await decode_jwt_token(
+                            token,
+                            expected_schema_name=expected_schema_name,
+                        )
 
                         if user:
                             set_attr(context, "user", user)

@@ -1,6 +1,8 @@
 # employees/models.py
 
 from django.db import models
+from datetime import timedelta
+from django.utils import timezone
 from django.contrib.auth.models import (
     AbstractBaseUser,
     PermissionsMixin,
@@ -185,7 +187,7 @@ class SocialAccount(models.Model):
 class EmailVerification(models.Model):
     """
     Stores the PIN sent to a newly created employee for email
-    verification. No expiry — employee can verify at any time.
+    verification. Deleted once the PIN is confirmed.
     Deleted once the PIN is confirmed.
 
     Only used for employees created by an admin (email+password path).
@@ -197,8 +199,19 @@ class EmailVerification(models.Model):
         on_delete=models.CASCADE,
         related_name="email_verification",
     )
-    pin        = models.CharField(max_length=6)
+    pin        = models.CharField(max_length=128)
+    attempts   = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            self.expires_at = timezone.now() + timedelta(minutes=30)
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() > self.expires_at
 
     def __str__(self):
         return f"EmailVerification({self.employee.email})"

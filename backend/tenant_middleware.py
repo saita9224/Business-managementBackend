@@ -15,6 +15,7 @@ X-Tenant and activates the correct schema.
 """
 
 from django.db import connection
+from django.conf import settings
 from django.http import JsonResponse
 
 
@@ -32,6 +33,9 @@ class XTenantMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        if not getattr(settings, "ENABLE_X_TENANT_HEADER", False):
+            return self.get_response(request)
+
         schema_name = request.headers.get("X-Tenant", "").strip()
 
         # Only intervene if we are still on the public schema

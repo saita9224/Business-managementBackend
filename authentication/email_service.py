@@ -97,7 +97,7 @@ Your email verification PIN is:
     {pin}
 
 Please enter this PIN when you first log in to verify your email address.
-This PIN does not expire.
+This PIN expires in 30 minutes.
 
 — {business_name} Management
 """
@@ -144,7 +144,7 @@ This PIN does not expire.
       margin: 0;
       font-family: monospace;
     ">{pin}</p>
-    <p style="color: #94a3b8; font-size: 12px; margin: 12px 0 0;">This PIN does not expire</p>
+    <p style="color: #94a3b8; font-size: 12px; margin: 12px 0 0;">Expires in 30 minutes</p>
   </div>
 
   <p style="color: #94a3b8; font-size: 12px;">

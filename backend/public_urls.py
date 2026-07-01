@@ -2,6 +2,7 @@
 
 import strawberry
 from django.contrib import admin
+from django.conf import settings
 from django.urls import path
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -15,7 +16,6 @@ from inventory.dataloaders import create_inventory_dataloaders
 from POS.dataloaders       import create_pos_dataloaders
 from hr.dataloaders        import create_hr_dataloaders
 from backend.schema        import schema
-from backend.middleware    import JWTMiddleware
 
 
 # ======================================================
@@ -212,7 +212,10 @@ urlpatterns = [
     path(
         "auth/",
         csrf_exempt(
-            PublicGraphQLView.as_view(schema=public_schema, graphiql=True)
+            PublicGraphQLView.as_view(
+                schema=public_schema,
+                graphiql=settings.GRAPHQL_IDE_ENABLED,
+            )
         ),
     ),
 
@@ -220,7 +223,10 @@ urlpatterns = [
     path(
         "super/graphql/",
         csrf_exempt(
-            AsyncGraphQLView.as_view(schema=super_admin_schema, graphiql=True)
+            AsyncGraphQLView.as_view(
+                schema=super_admin_schema,
+                graphiql=settings.GRAPHQL_IDE_ENABLED,
+            )
         ),
     ),
 
@@ -230,7 +236,10 @@ urlpatterns = [
     path(
         "graphql/",
         csrf_exempt(
-            TenantGraphQLView.as_view(schema=schema, graphiql=True)
+            TenantGraphQLView.as_view(
+                schema=schema,
+                graphiql=settings.GRAPHQL_IDE_ENABLED,
+            )
         ),
     ),
 ]

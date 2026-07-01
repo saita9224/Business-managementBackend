@@ -4,9 +4,11 @@ import strawberry
 
 from graphql import GraphQLError
 from asgiref.sync import sync_to_async
+from strawberry.types import Info
 
 from .services import (
     find_employee_by_email,
+    find_employee_by_email_in_schema,
     build_auth_payload,
     create_pending_registration,
     verify_pending_registration,
@@ -74,13 +76,24 @@ class AuthMutation:
     @strawberry.mutation
     async def login(
         self,
+        info: Info,
         email: str,
         password: str,
+        schema_name: str | None = None,
     ) -> LoginPayload:
+        request = getattr(info.context, "request", None)
+        tenant = getattr(request, "tenant", None) if request else None
+        resolved_schema_name = (
+            getattr(tenant, "schema_name", None)
+            or schema_name
+        )
 
-        employee, schema_name = await sync_to_async(
-            find_employee_by_email
-        )(email)
+        if not resolved_schema_name:
+            raise GraphQLError("Business identifier is required")
+
+        employee = await sync_to_async(
+            find_employee_by_email_in_schema
+        )(email.strip().lower(), resolved_schema_name)
 
         if not employee:
             raise GraphQLError("Invalid email or password")
@@ -88,7 +101,7 @@ class AuthMutation:
         if not employee.check_password(password):
             raise GraphQLError("Invalid email or password")
 
-        data = build_auth_payload(employee, schema_name)
+        data = build_auth_payload(employee, resolved_schema_name)
 
         return LoginPayload(
             token=             data["token"],

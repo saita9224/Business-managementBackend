@@ -13,9 +13,13 @@ SECRET_KEY = config('SECRET_KEY')
 
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-# In development: ALLOWED_HOSTS=* in .env
+# In development: ALLOWED_HOSTS=localhost,127.0.0.1,[::1]
 # In production:  ALLOWED_HOSTS=yourdomain.com,api.yourdomain.com
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*', cast=Csv())
+ALLOWED_HOSTS = config(
+    'ALLOWED_HOSTS',
+    default='localhost,127.0.0.1,[::1]',
+    cast=Csv(),
+)
 
 
 # ======================================================
@@ -59,6 +63,11 @@ INSTALLED_APPS = list(SHARED_APPS) + [
 TENANT_MODEL        = "tenants.Business"
 TENANT_DOMAIN_MODEL = "tenants.Domain"
 SHOW_PUBLIC_IF_NO_TENANT_FOUND = True
+ENABLE_X_TENANT_HEADER = config(
+    'ENABLE_X_TENANT_HEADER',
+    default=DEBUG,
+    cast=bool,
+)
 
 
 # ======================================================
@@ -154,9 +163,11 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # ======================================================
-# CORS
+# CORS / API SURFACE
 # ======================================================
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='', cast=Csv())
+CORS_ALLOW_ALL_ORIGINS = DEBUG and not CORS_ALLOWED_ORIGINS
+GRAPHQL_IDE_ENABLED = config('GRAPHQL_IDE_ENABLED', default=DEBUG, cast=bool)
 
 
 # ======================================================
@@ -164,6 +175,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 # ======================================================
 JWT_ALGORITHM             = "HS256"
 JWT_ACCESS_EXPIRES_SECONDS = 3600  # 1 hour
+AUTH_PIN_MAX_ATTEMPTS = config('AUTH_PIN_MAX_ATTEMPTS', default=5, cast=int)
 
 
 # ======================================================

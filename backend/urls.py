@@ -8,6 +8,7 @@
 # by backend/public_urls.py as set in settings.PUBLIC_SCHEMA_URLCONF.
 
 from django.contrib import admin
+from django.conf import settings
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 
@@ -74,7 +75,10 @@ urlpatterns = [
     path(
         "graphql/",
         csrf_exempt(
-            CustomGraphQLView.as_view(schema=schema, graphiql=True)
+            CustomGraphQLView.as_view(
+                schema=schema,
+                graphiql=settings.GRAPHQL_IDE_ENABLED,
+            )
         )
     ),
 ]

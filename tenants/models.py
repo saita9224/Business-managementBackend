@@ -45,7 +45,8 @@ class SuperAdmin(models.Model):
 class PendingRegistration(models.Model):
     email         = models.EmailField(unique=True, db_index=True)
     business_name = models.CharField(max_length=200)
-    pin           = models.CharField(max_length=6)
+    pin           = models.CharField(max_length=128)
+    attempts      = models.PositiveSmallIntegerField(default=0)
     created_at    = models.DateTimeField(auto_now_add=True)
     expires_at    = models.DateTimeField()
 
@@ -67,7 +68,8 @@ class PendingRegistration(models.Model):
 
 class PasswordResetRequest(models.Model):
     email      = models.EmailField(unique=True, db_index=True)
-    pin        = models.CharField(max_length=6)
+    pin        = models.CharField(max_length=128)
+    attempts   = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
 

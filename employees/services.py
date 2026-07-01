@@ -3,8 +3,10 @@
 import logging
 from typing import List, Optional
 
+from django.conf import settings
 from django.db import transaction
 from django.core.exceptions import ValidationError
+from django.contrib.auth.hashers import check_password, make_password
 
 from .models import (
     Employee,
@@ -16,6 +18,7 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+MAX_PIN_ATTEMPTS = getattr(settings, "AUTH_PIN_MAX_ATTEMPTS", 5)
 
 
 # ======================================================
@@ -305,7 +308,7 @@ def create_employee_verification_pin(employee: Employee) -> str:
 
     # Replace any existing verification record (covers resend case)
     EmailVerification.objects.filter(employee=employee).delete()
-    EmailVerification.objects.create(employee=employee, pin=pin)
+    EmailVerification.objects.create(employee=employee, pin=make_password(pin))
 
     logger.info("Created email verification PIN for %s", employee.email)
     return pin
@@ -327,7 +330,30 @@ def verify_employee_email_pin(employee: Employee, pin: str) -> None:
             "Ask your admin to resend the verification email."
         )
 
-    if verification.pin != pin:
+    if verification.is_expired:
+        verification.delete()
+        raise ValueError(
+            "Verification PIN has expired. Please request a new one."
+        )
+
+    if verification.attempts >= MAX_PIN_ATTEMPTS:
+        verification.delete()
+        raise ValueError(
+            "Too many incorrect attempts. Please request a new PIN."
+        )
+
+    pin_matches = (
+        verification.pin == pin
+        if len(verification.pin) == 6 and verification.pin.isdigit()
+        else check_password(pin, verification.pin)
+    )
+
+    if not pin_matches:
+        verification.attempts += 1
+        if verification.attempts >= MAX_PIN_ATTEMPTS:
+            verification.delete()
+        else:
+            verification.save(update_fields=["attempts"])
         raise ValueError(
             "Incorrect PIN. Please check your email and try again."
         )

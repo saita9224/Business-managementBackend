@@ -8,7 +8,7 @@ from employees.models import Employee
 @pytest.mark.django_db
 def test_middleware_sets_user(client, employee_factory):
     employee = employee_factory()
-    token = create_jwt_token(employee)
+    token = create_jwt_token(employee, "public")
 
     response = client.post(
         "/graphql/",

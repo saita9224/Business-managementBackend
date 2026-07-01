@@ -1,4 +1,5 @@
 import jwt
+from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.test import SimpleTestCase
 
@@ -9,6 +10,7 @@ from authentication.services import (
     _slugify,
     create_jwt_token,
     create_super_admin_jwt,
+    decode_jwt_token,
 )
 
 
@@ -32,6 +34,17 @@ class AuthenticationUtilityTests(SimpleTestCase):
         self.assertEqual(payload["user_id"], 42)
         self.assertEqual(payload["schema_name"], "demo_schema")
         self.assertEqual(payload["role"], "employee")
+
+    def test_employee_jwt_rejects_wrong_request_schema(self):
+        employee = type("EmployeeStub", (), {"id": 42})()
+
+        token = create_jwt_token(employee, "tenant_a", expires_in=60)
+        user = async_to_sync(decode_jwt_token)(
+            token,
+            expected_schema_name="tenant_b",
+        )
+
+        self.assertIsNone(user)
 
     def test_super_admin_jwt_uses_superadmin_claims(self):
         admin = type("AdminStub", (), {"id": 7})()
