@@ -8,7 +8,6 @@ from strawberry.types import Info
 
 from .services import (
     find_employee_by_email,
-    find_employee_by_email_in_schema,
     build_auth_payload,
     create_pending_registration,
     verify_pending_registration,
@@ -79,21 +78,17 @@ class AuthMutation:
         info: Info,
         email: str,
         password: str,
-        schema_name: str | None = None,
     ) -> LoginPayload:
-        request = getattr(info.context, "request", None)
-        tenant = getattr(request, "tenant", None) if request else None
-        resolved_schema_name = (
-            getattr(tenant, "schema_name", None)
-            or schema_name
-        )
-
-        if not resolved_schema_name:
-            raise GraphQLError("Business identifier is required")
-
-        employee = await sync_to_async(
-            find_employee_by_email_in_schema
-        )(email.strip().lower(), resolved_schema_name)
+        # NOTE: login always arrives through the public schema (/auth/ is
+        # mounted on the bare domain, never a tenant subdomain — see
+        # lib/graphql.js PUBLIC_URL). request.tenant is therefore always
+        # the public tenant here, so we can't resolve which business the
+        # user belongs to from tenant middleware. Instead we search across
+        # all tenant schemas by email, same as googleAuth and the password
+        # reset flow already do.
+        employee, resolved_schema_name = await sync_to_async(
+            find_employee_by_email
+        )(email.strip().lower())
 
         if not employee:
             raise GraphQLError("Invalid email or password")

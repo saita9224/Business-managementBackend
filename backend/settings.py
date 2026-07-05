@@ -27,6 +27,7 @@ ALLOWED_HOSTS = config(
 # ======================================================
 
 SHARED_APPS = [
+    'django_extensions',
     'django_tenants',
     'tenants',
     'django.contrib.contenttypes',
