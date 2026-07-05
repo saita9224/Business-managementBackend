@@ -10,7 +10,14 @@ from datetime import timedelta
 class Business(TenantMixin):
     name       = models.CharField(max_length=200)
     created_at = models.DateTimeField(auto_now_add=True)
+
     auto_create_schema = True
+
+    # CHANGE (#2): without this, Business.delete() only removes the row
+    # and leaves the actual PostgreSQL schema behind. This is required
+    # for the rollback-on-failure cleanup in create_new_tenant_and_admin
+    # to actually work.
+    auto_drop_schema = True
 
     def __str__(self):
         return self.name
@@ -87,3 +94,19 @@ class PasswordResetRequest(models.Model):
 
     def __str__(self):
         return f"PasswordResetRequest({self.email}, expires={self.expires_at})"
+
+
+# ======================================================
+# CHANGE (#3): EmailIndex fast-path cache
+# ======================================================
+class EmailIndex(models.Model):
+    
+    email       = models.EmailField(unique=True, db_index=True)
+    schema_name = models.CharField(max_length=63)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = 'tenants'
+
+    def __str__(self):
+        return f"{self.email} -> {self.schema_name}"

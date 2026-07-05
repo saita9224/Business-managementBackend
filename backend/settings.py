@@ -70,6 +70,12 @@ ENABLE_X_TENANT_HEADER = config(
     cast=bool,
 )
 
+# CHANGE (#1): suffix used when a new tenant's Domain row is created
+# during registration/Google sign-up.
+# Dev  (.env): TENANT_DOMAIN_SUFFIX=localhost
+# Prod (.env): TENANT_DOMAIN_SUFFIX=api.yourdomain.com
+TENANT_DOMAIN_SUFFIX = config('TENANT_DOMAIN_SUFFIX', default='localhost')
+
 
 # ======================================================
 # MIDDLEWARE

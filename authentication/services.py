@@ -13,10 +13,15 @@ from django_tenants.utils import schema_context
 
 logger = logging.getLogger(__name__)
 
-JWT_SECRET           = getattr(settings, "JWT_SECRET", settings.SECRET_KEY)
-ALGORITHM            = getattr(settings, "JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRES = getattr(settings, "JWT_ACCESS_EXPIRES_SECONDS", 3600)
-MAX_PIN_ATTEMPTS     = getattr(settings, "AUTH_PIN_MAX_ATTEMPTS", 5)
+JWT_SECRET            = getattr(settings, "JWT_SECRET", settings.SECRET_KEY)
+ALGORITHM             = getattr(settings, "JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRES  = getattr(settings, "JWT_ACCESS_EXPIRES_SECONDS", 3600)
+MAX_PIN_ATTEMPTS      = getattr(settings, "AUTH_PIN_MAX_ATTEMPTS", 5)
+
+# CHANGE (#1): domain suffix is now configurable per environment.
+# Dev: settings.TENANT_DOMAIN_SUFFIX = "localhost"
+# Prod: settings.TENANT_DOMAIN_SUFFIX = "api.yourdomain.com"
+TENANT_DOMAIN_SUFFIX  = getattr(settings, "TENANT_DOMAIN_SUFFIX", "localhost")
 
 
 def create_jwt_token(
@@ -173,10 +178,84 @@ def build_auth_payload(
     }
 
 
+# ======================================================
+# CHANGE (#3): EmailIndex fast-path helpers
+# ======================================================
+#
+# EmailIndex lives in the public schema and maps email -> schema_name.
+# It is a CACHE, not a source of truth. Every lookup that uses it falls
+# back to the full per-tenant scan on a miss, so a stale or missing
+# index entry can never break login -- it can only make that one
+# request slower (same cost as before this change).
+
+def _index_lookup(email: str) -> str | None:
+    from tenants.models import EmailIndex
+
+    try:
+        return EmailIndex.objects.get(email__iexact=email).schema_name
+    except EmailIndex.DoesNotExist:
+        return None
+
+
+def _index_upsert(email: str, schema_name: str) -> None:
+    from tenants.models import EmailIndex
+
+    EmailIndex.objects.update_or_create(
+        email=email.lower(),
+        defaults={"schema_name": schema_name},
+    )
+
+
+def _index_delete(email: str) -> None:
+    from tenants.models import EmailIndex
+
+    EmailIndex.objects.filter(email__iexact=email).delete()
+
+
 def find_existing_google_user(google_id: str, email: str):
     from tenants.models import Business
     from employees.models import Employee, SocialAccount
 
+    # Fast path: try the schema the index points to first.
+    indexed_schema = _index_lookup(email) if email else None
+
+    if indexed_schema:
+        with schema_context(indexed_schema):
+            try:
+                account = (
+                    SocialAccount.objects
+                    .select_related("employee")
+                    .get(provider="google", provider_id=google_id)
+                )
+                return account.employee, indexed_schema
+            except SocialAccount.DoesNotExist:
+                pass
+
+            try:
+                employee = Employee.objects.get(
+                    email__iexact=email,
+                    is_active=True,
+                )
+                SocialAccount.objects.create(
+                    employee=employee,
+                    provider="google",
+                    provider_id=google_id,
+                    email=email,
+                    name=employee.name,
+                    picture_url=None,
+                )
+                logger.info(
+                    "Auto-linked Google account for %s in schema %s (index hit)",
+                    email,
+                    indexed_schema,
+                )
+                return employee, indexed_schema
+            except Employee.DoesNotExist:
+                # Index was stale -- clean it up and fall through to full scan.
+                _index_delete(email)
+
+    # Slow path: full scan (also covers google_id-only matches where the
+    # stored email differs, or the index missed).
     for tenant in Business.objects.exclude(schema_name="public"):
 
         with schema_context(tenant.schema_name):
@@ -187,6 +266,8 @@ def find_existing_google_user(google_id: str, email: str):
                     .select_related("employee")
                     .get(provider="google", provider_id=google_id)
                 )
+                if email:
+                    _index_upsert(email, tenant.schema_name)
                 return account.employee, tenant.schema_name
 
             except SocialAccount.DoesNotExist:
@@ -213,6 +294,8 @@ def find_existing_google_user(google_id: str, email: str):
                         email,
                         tenant.schema_name,
                     )
+
+                    _index_upsert(email, tenant.schema_name)
 
                     return employee, tenant.schema_name
 
@@ -264,45 +347,67 @@ def create_new_tenant_and_admin(
     )
     business.save()
 
+    # CHANGE (#1): use the configured suffix instead of hardcoded ".localhost"
     Domain.objects.create(
         tenant=business,
-        domain=f"{schema_name}.localhost",
+        domain=f"{schema_name}.{TENANT_DOMAIN_SUFFIX}",
         is_primary=True,
     )
 
-    with schema_context(schema_name):
+    # CHANGE (#2): wrap admin creation so a failure here doesn't leave
+    # a permanently orphaned Business + Domain + empty schema behind.
+    try:
+        with schema_context(schema_name):
 
-        with transaction.atomic():
+            with transaction.atomic():
 
-            admin_role, _ = Role.objects.get_or_create(name="Admin")
+                admin_role, _ = Role.objects.get_or_create(name="Admin")
 
-            email = (
-                user_info["email"]
-                or f"google_{user_info.get('provider_id')}@noemail.local"
-            )
-
-            employee = Employee(
-                name=user_info.get("name") or "Admin",
-                email=email,
-                is_active=True,
-                is_email_verified=True,
-            )
-
-            if set_unusable_password:
-                employee.set_unusable_password()
-
-            employee.save()
-            employee.roles.add(admin_role)
-
-            if user_info.get("provider_id"):
-                SocialAccount.objects.create(
-                    employee=employee,
-                    provider="google",
-                    provider_id=user_info["provider_id"],
-                    email=email,
-                    name=user_info.get("name") or "",
-                    picture_url=user_info.get("picture_url"),
+                email = (
+                    user_info["email"]
+                    or f"google_{user_info.get('provider_id')}@noemail.local"
                 )
+
+                employee = Employee(
+                    name=user_info.get("name") or "Admin",
+                    email=email,
+                    is_active=True,
+                    is_email_verified=True,
+                )
+
+                if set_unusable_password:
+                    employee.set_unusable_password()
+
+                employee.save()
+                employee.roles.add(admin_role)
+
+                if user_info.get("provider_id"):
+                    SocialAccount.objects.create(
+                        employee=employee,
+                        provider="google",
+                        provider_id=user_info["provider_id"],
+                        email=email,
+                        name=user_info.get("name") or "",
+                        picture_url=user_info.get("picture_url"),
+                    )
+
+    except Exception:
+        logger.error(
+            "Failed to create admin employee for new tenant '%s' (schema: %s) "
+            "-- rolling back tenant.",
+            business_name,
+            schema_name,
+            exc_info=True,
+        )
+        # business.delete() must actually drop the PostgreSQL schema.
+        # Confirm TenantMixin/Business.Meta has auto_drop_schema=True
+        # (django-tenants setting) -- otherwise this only deletes the row
+        # and leaves an orphaned schema in Postgres. See note below.
+        business.delete()
+        raise
+
+    # CHANGE (#3): keep the fast lookup index in sync at creation time.
+    _index_upsert(email, schema_name)
 
     logger.info(
         "Created new tenant '%s' (schema: %s)",
@@ -317,6 +422,26 @@ def find_employee_by_email(email: str):
     from tenants.models import Business
     from employees.models import Employee
 
+    # CHANGE (#3): fast path via EmailIndex
+    indexed_schema = _index_lookup(email)
+
+    if indexed_schema:
+        with schema_context(indexed_schema):
+            try:
+                employee = (
+                    Employee.objects
+                    .prefetch_related("roles__permissions")
+                    .get(email__iexact=email, is_active=True)
+                )
+                return employee, indexed_schema
+            except Employee.DoesNotExist:
+                # Stale index entry (email moved schemas, or employee
+                # deactivated/deleted without index cleanup) -- fix it
+                # and fall through to the full scan below.
+                _index_delete(email)
+
+    # Slow path: full scan, same as before. Also self-heals the index
+    # whenever it finds a match this way.
     for tenant in Business.objects.exclude(schema_name="public"):
 
         with schema_context(tenant.schema_name):
@@ -327,6 +452,7 @@ def find_employee_by_email(email: str):
                     .prefetch_related("roles__permissions")
                     .get(email__iexact=email, is_active=True)
                 )
+                _index_upsert(email, tenant.schema_name)
                 return employee, tenant.schema_name
 
             except Employee.DoesNotExist:
