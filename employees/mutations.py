@@ -4,6 +4,7 @@ import typing
 import strawberry
 from strawberry.types import Info
 from asgiref.sync import sync_to_async
+from django.db import connection
 
 from .decorators import permission_required
 from .types import (
@@ -14,6 +15,7 @@ from .types import (
     EmployeeInput,
 )
 from . import services
+from authentication.services import index_employee_email, deindex_employee_email
 
 
 # ======================================================
@@ -170,9 +172,10 @@ class EmployeeMutation:
         Create an employee with named roles and send a welcome
         email containing their verification PIN.
         """
-        from django.db import connection
         from tenants.models import Business
         from authentication.email_service import send_employee_verification_pin
+
+        schema_name = connection.schema_name
 
         employee, plain_password = await sync_to_async(services.create_employee)(
             name=      data.name,
@@ -182,6 +185,9 @@ class EmployeeMutation:
             role_names=data.role_names,
         )
 
+        # Keep EmailIndex in sync for this new employee.
+        await sync_to_async(index_employee_email)(employee.email, schema_name)
+
         # Generate verification PIN
         pin = await sync_to_async(
             services.create_employee_verification_pin
@@ -190,7 +196,7 @@ class EmployeeMutation:
         # Get business name for the email template
         try:
             business = await sync_to_async(Business.objects.get)(
-                schema_name=connection.schema_name
+                schema_name=schema_name
             )
             business_name = business.name
         except Exception:
@@ -221,7 +227,18 @@ class EmployeeMutation:
         password:   typing.Optional[str]            = None,
         role_names: typing.Optional[typing.List[str]] = None,
     ) -> EmployeeType:
-        return services.update_employee(
+        schema_name = connection.schema_name
+
+        # Capture the old email before update_employee overwrites it,
+        # so we can de-index it if the email is changing.
+        old_email = None
+        if email:
+            from .models import Employee
+            old_email = Employee.objects.filter(id=id).values_list(
+                "email", flat=True
+            ).first()
+
+        updated = services.update_employee(
             employee_id=id,
             name=       name,
             email=      email,
@@ -230,12 +247,30 @@ class EmployeeMutation:
             role_names= role_names,
         )
 
+        # Re-index only if the email actually changed.
+        if email and old_email and email.lower() != old_email.lower():
+            deindex_employee_email(old_email)
+            index_employee_email(updated.email, schema_name)
+
+        return updated
+
     # ── DELETE EMPLOYEE ────────────────────────────────
 
     @strawberry.mutation
     @permission_required("employee.delete")
     def delete_employee(self, info: Info, id: int) -> bool:
-        return services.delete_employee(id)
+        # Capture email before deletion so we can de-index it.
+        from .models import Employee
+        email = Employee.objects.filter(id=id).values_list(
+            "email", flat=True
+        ).first()
+
+        result = services.delete_employee(id)
+
+        if result and email:
+            deindex_employee_email(email)
+
+        return result
 
     # ── ONBOARD EMPLOYEE — ATOMIC ──────────────────────
 
@@ -251,9 +286,10 @@ class EmployeeMutation:
         atomic transaction, then send a welcome email with their
         verification PIN and temporary password.
         """
-        from django.db import connection
         from tenants.models import Business
         from authentication.email_service import send_employee_verification_pin
+
+        schema_name = connection.schema_name
 
         employee, plain_password = await sync_to_async(services.onboard_employee)(
             name=            data.name,
@@ -263,6 +299,9 @@ class EmployeeMutation:
             permission_codes=data.permission_codes,
         )
 
+        # Keep EmailIndex in sync for this new employee.
+        await sync_to_async(index_employee_email)(employee.email, schema_name)
+
         # Generate verification PIN
         pin = await sync_to_async(
             services.create_employee_verification_pin
@@ -271,7 +310,7 @@ class EmployeeMutation:
         # Get business name for the email template
         try:
             business = await sync_to_async(Business.objects.get)(
-                schema_name=connection.schema_name
+                schema_name=schema_name
             )
             business_name = business.name
         except Exception:
@@ -333,7 +372,6 @@ class EmployeeMutation:
         Resend the verification PIN to the authenticated employee.
         Generates a new PIN (invalidating the old one) and emails it.
         """
-        from django.db import connection
         from tenants.models import Business
         from authentication.email_service import send_employee_verification_pin
 
