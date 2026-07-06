@@ -18,7 +18,7 @@ ALGORITHM             = getattr(settings, "JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRES  = getattr(settings, "JWT_ACCESS_EXPIRES_SECONDS", 3600)
 MAX_PIN_ATTEMPTS      = getattr(settings, "AUTH_PIN_MAX_ATTEMPTS", 5)
 
-# CHANGE (#1): domain suffix is now configurable per environment.
+# Domain suffix is configurable per environment.
 # Dev: settings.TENANT_DOMAIN_SUFFIX = "localhost"
 # Prod: settings.TENANT_DOMAIN_SUFFIX = "api.yourdomain.com"
 TENANT_DOMAIN_SUFFIX  = getattr(settings, "TENANT_DOMAIN_SUFFIX", "localhost")
@@ -179,7 +179,7 @@ def build_auth_payload(
 
 
 # ======================================================
-# CHANGE (#3): EmailIndex fast-path helpers
+# EmailIndex fast-path helpers
 # ======================================================
 #
 # EmailIndex lives in the public schema and maps email -> schema_name.
@@ -210,6 +210,24 @@ def _index_delete(email: str) -> None:
     from tenants.models import EmailIndex
 
     EmailIndex.objects.filter(email__iexact=email).delete()
+
+
+# ======================================================
+# Public wrappers for other apps (e.g. employees/mutations.py)
+# to keep EmailIndex in sync when employees are created,
+# updated, or removed within an existing tenant.
+# ======================================================
+
+def index_employee_email(email: str, schema_name: str) -> None:
+    """Call after creating an employee or changing their email."""
+    if email:
+        _index_upsert(email, schema_name)
+
+
+def deindex_employee_email(email: str) -> None:
+    """Call after deleting an employee or deactivating them."""
+    if email:
+        _index_delete(email)
 
 
 def find_existing_google_user(google_id: str, email: str):
@@ -347,15 +365,15 @@ def create_new_tenant_and_admin(
     )
     business.save()
 
-    # CHANGE (#1): use the configured suffix instead of hardcoded ".localhost"
+    # Uses the configured suffix instead of a hardcoded ".localhost"
     Domain.objects.create(
         tenant=business,
         domain=f"{schema_name}.{TENANT_DOMAIN_SUFFIX}",
         is_primary=True,
     )
 
-    # CHANGE (#2): wrap admin creation so a failure here doesn't leave
-    # a permanently orphaned Business + Domain + empty schema behind.
+    # Wrapped so a failure here doesn't leave a permanently orphaned
+    # Business + Domain + empty schema behind.
     try:
         with schema_context(schema_name):
 
@@ -399,14 +417,12 @@ def create_new_tenant_and_admin(
             schema_name,
             exc_info=True,
         )
-        # business.delete() must actually drop the PostgreSQL schema.
-        # Confirm TenantMixin/Business.Meta has auto_drop_schema=True
-        # (django-tenants setting) -- otherwise this only deletes the row
-        # and leaves an orphaned schema in Postgres. See note below.
+        # business.delete() actually drops the PostgreSQL schema because
+        # Business.auto_drop_schema = True (see tenants/models.py).
         business.delete()
         raise
 
-    # CHANGE (#3): keep the fast lookup index in sync at creation time.
+    # Keep the fast lookup index in sync at creation time.
     _index_upsert(email, schema_name)
 
     logger.info(
@@ -422,7 +438,7 @@ def find_employee_by_email(email: str):
     from tenants.models import Business
     from employees.models import Employee
 
-    # CHANGE (#3): fast path via EmailIndex
+    # Fast path via EmailIndex
     indexed_schema = _index_lookup(email)
 
     if indexed_schema:
