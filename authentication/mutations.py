@@ -96,7 +96,12 @@ class AuthMutation:
         if not employee.check_password(password):
             raise GraphQLError("Invalid email or password")
 
-        data = build_auth_payload(employee, resolved_schema_name)
+        # FIX: build_auth_payload does synchronous ORM work
+        # (schema_context, roles/permissions queries) and must be
+        # wrapped in sync_to_async when called from an async resolver.
+        data = await sync_to_async(build_auth_payload)(
+            employee, resolved_schema_name
+        )
 
         return LoginPayload(
             token=             data["token"],
@@ -172,7 +177,9 @@ class AuthMutation:
             password,
         )
 
-        data = build_auth_payload(
+        # FIX: same issue as login() — build_auth_payload must be
+        # wrapped since it runs synchronous ORM queries.
+        data = await sync_to_async(build_auth_payload)(
             employee,
             schema_name,
             is_new_user=True,
@@ -232,7 +239,10 @@ class AuthMutation:
         except ValueError as exc:
             raise GraphQLError(str(exc))
 
-        data = build_auth_payload(employee, schema_name)
+        # FIX: same issue — wrap build_auth_payload.
+        data = await sync_to_async(build_auth_payload)(
+            employee, schema_name
+        )
 
         return ResetPasswordPayload(
             token=       data["token"],

@@ -35,6 +35,21 @@ class GoogleAuthPayload:
     is_new_user: bool  # true when a brand-new Business was just created
 
 
+def _reload_employee_with_roles(employee, schema_name):
+    """
+    Sync helper: enters schema_context and re-fetches the employee
+    with roles/permissions prefetched. Must be called via
+    sync_to_async from an async resolver — schema_context and the
+    ORM query inside it are both synchronous.
+    """
+    with schema_context(schema_name):
+        return (
+            type(employee).objects
+            .prefetch_related("roles__permissions")
+            .get(pk=employee.pk)
+        )
+
+
 @strawberry.type
 class SocialAuthMutation:
 
@@ -74,14 +89,19 @@ class SocialAuthMutation:
         )(google_id, email)
 
         if employee:
-            # Reload with roles + permissions inside the correct schema
-            with schema_context(schema_name):
-                employee = await sync_to_async(
-                    lambda: type(employee).objects
-                    .prefetch_related("roles__permissions")
-                    .get(pk=employee.pk)
-                )()
-            data = build_auth_payload(employee, schema_name, is_new_user=False)
+            # FIX: schema_context + the .get() query are synchronous —
+            # wrap the whole reload in sync_to_async, don't enter
+            # schema_context directly inside this async def.
+            employee = await sync_to_async(_reload_employee_with_roles)(
+                employee, schema_name
+            )
+
+            # FIX: build_auth_payload does synchronous ORM work
+            # (schema_context, roles/permissions queries) and must be
+            # wrapped in sync_to_async when called from an async resolver.
+            data = await sync_to_async(build_auth_payload)(
+                employee, schema_name, is_new_user=False
+            )
             return GoogleAuthPayload(**data)
 
         # 3. No existing user — register a new Business
@@ -96,13 +116,13 @@ class SocialAuthMutation:
             create_new_tenant_and_admin
         )(user_info, business_name.strip())
 
-        # Reload with relations
-        with schema_context(schema_name):
-            employee = await sync_to_async(
-                lambda: type(employee).objects
-                .prefetch_related("roles__permissions")
-                .get(pk=employee.pk)
-            )()
+        # FIX: same as above — reload must go through sync_to_async.
+        employee = await sync_to_async(_reload_employee_with_roles)(
+            employee, schema_name
+        )
 
-        data = build_auth_payload(employee, schema_name, is_new_user=True)
+        # FIX: wrap build_auth_payload.
+        data = await sync_to_async(build_auth_payload)(
+            employee, schema_name, is_new_user=True
+        )
         return GoogleAuthPayload(**data)
