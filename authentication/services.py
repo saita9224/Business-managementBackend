@@ -87,6 +87,11 @@ async def decode_jwt_token(
         if not employee.is_active:
             return None
 
+        # Stash the schema name on the returned object so callers
+        # (e.g. JWTMiddleware in backend/middleware.py) can activate
+        # it for the rest of the request without re-decoding the token.
+        employee._jwt_schema_name = schema_name
+
         return employee
 
     except (ExpiredSignatureError, InvalidTokenError, DecodeError):
