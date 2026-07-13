@@ -355,6 +355,7 @@ def create_new_tenant_and_admin(
     from tenants.models import Business, Domain
     from employees.models import Employee, Role, SocialAccount
     from django.db import transaction
+    from django.core.management import call_command
 
     base_slug   = _slugify(business_name)
     schema_name = _unique_schema_name(base_slug)
@@ -365,6 +366,29 @@ def create_new_tenant_and_admin(
     )
     business.save()
 
+    # Explicitly guarantee TENANT_APPS tables exist in this schema before
+    # writing to it. auto_create_schema is supposed to run this
+    # automatically inside business.save(), but we run it explicitly too
+    # as a safety net -- this is a no-op if migrations already ran, and
+    # fixes the case where the automatic step is skipped or fails silently.
+    try:
+        call_command(
+            "migrate_schemas",
+            schema_name=schema_name,
+            interactive=False,
+            verbosity=0,
+        )
+    except Exception:
+        logger.error(
+            "Failed to migrate schema '%s' for new tenant '%s' "
+            "-- rolling back tenant.",
+            schema_name,
+            business_name,
+            exc_info=True,
+        )
+        business.delete()
+        raise
+
     # Uses the configured suffix instead of a hardcoded ".localhost"
     Domain.objects.create(
         tenant=business,
@@ -373,7 +397,7 @@ def create_new_tenant_and_admin(
     )
 
     # Wrapped so a failure here doesn't leave a permanently orphaned
-    # Business + Domain + empty schema behind.
+    # Business + Domain + migrated-but-empty schema behind.
     try:
         with schema_context(schema_name):
 
