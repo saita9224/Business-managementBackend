@@ -2,10 +2,38 @@
 
 import logging
 from strawberry.extensions import SchemaExtension
+from asgiref.sync import sync_to_async
 from django.db import connection
 from authentication.services import decode_jwt_token
 
 logger = logging.getLogger(__name__)
+
+
+def _get_current_schema_name():
+    """
+    Looks up connection.schema_name on whichever thread this runs on.
+    Must be called via sync_to_async so it resolves against the same
+    thread that resolvers will actually query on.
+    """
+    from django.db import connection as conn
+    return getattr(conn, "schema_name", None)
+
+
+def _set_schema(schema_name):
+    """
+    Resolves `connection` and calls set_schema entirely inside this
+    function -- never as a bare attribute access outside sync_to_async.
+    connection is thread-local, so resolving it before dispatching to
+    a worker thread binds to the wrong thread's connection and is a
+    silent no-op for every query that runs afterward.
+    """
+    from django.db import connection as conn
+    conn.set_schema(schema_name)
+
+
+def _set_schema_to_public():
+    from django.db import connection as conn
+    conn.set_schema_to_public()
 
 
 class JWTMiddleware(SchemaExtension):
@@ -18,14 +46,15 @@ class JWTMiddleware(SchemaExtension):
         Also derives and activates the tenant schema from the JWT's
         schema_name claim (set at login/registration -- see
         authentication/services.py create_jwt_token), so clients no
-        longer need to send X-Tenant on authenticated requests. The
-        JWT already carries everything needed to route the request
-        to the correct schema.
+        longer need to send X-Tenant on authenticated requests.
 
-        XTenantMiddleware / X-Tenant header still work unchanged for
-        requests without a JWT (local tooling, scripts) since Django
-        middleware runs before this extension and may already have
-        set a non-public schema -- in that case we don't override it.
+        IMPORTANT: connection is thread-local. Every read or write of
+        connection/schema state here must happen INSIDE a function
+        passed to sync_to_async, never as a bare attribute access in
+        this async method's own body -- otherwise it resolves against
+        the event-loop thread instead of the pinned worker thread that
+        resolvers (via sync_to_async(thread_sensitive=True)) actually
+        query on, and the switch silently does nothing.
         """
 
         context = self.execution_context.context
@@ -61,14 +90,11 @@ class JWTMiddleware(SchemaExtension):
                     prefix, token = parts
 
                     if prefix.lower() == "bearer":
-                        # If Django middleware (X-Tenant / subdomain)
-                        # already resolved a non-public tenant, respect
-                        # it and just verify the JWT matches. Otherwise
-                        # we're still on public -- let the JWT itself
-                        # decide the schema.
-                        current_schema = getattr(
-                            connection, "schema_name", None
-                        )
+                        # FIX: resolve current_schema via sync_to_async
+                        # so it's read on the same thread queries run on.
+                        current_schema = await sync_to_async(
+                            _get_current_schema_name
+                        )()
 
                         if current_schema and current_schema != "public":
                             expected_schema_name = current_schema
@@ -84,24 +110,22 @@ class JWTMiddleware(SchemaExtension):
                             set_attr(context, "user", user)
                             logger.debug(f"Authenticated: {user.email}")
 
-                            # Activate the tenant schema for the rest
-                            # of this operation, if not already active.
                             if (
                                 current_schema == "public"
                                 or current_schema is None
                             ):
-                                from asgiref.sync import sync_to_async
-
                                 jwt_schema_name = getattr(
                                     user, "_jwt_schema_name", None
                                 )
-                                # decode_jwt_token doesn't currently
-                                # return the schema_name alongside the
-                                # user -- see services.py change below.
                                 if jwt_schema_name:
-                                    await sync_to_async(
-                                        connection.set_schema
-                                    )(jwt_schema_name)
+                                    # FIX: entire connection lookup +
+                                    # set_schema call happens inside
+                                    # _set_schema, dispatched via
+                                    # sync_to_async -- not resolved
+                                    # eagerly on the event-loop thread.
+                                    await sync_to_async(_set_schema)(
+                                        jwt_schema_name
+                                    )
                                     schema_switched = True
                         else:
                             logger.debug("Invalid or expired token")
@@ -109,5 +133,6 @@ class JWTMiddleware(SchemaExtension):
         yield  # 👈 resolvers execute here
 
         if schema_switched:
-            from asgiref.sync import sync_to_async
-            await sync_to_async(connection.set_schema_to_public)()
+            # FIX: same pattern -- resolve connection inside the
+            # sync_to_async-dispatched function.
+            await sync_to_async(_set_schema_to_public)()
