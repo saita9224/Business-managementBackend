@@ -1,0 +1,1 @@
+{"query": "mutation { requestRegistration(email: \"novababygirl790@gmail.com\", businessName: \"Nova Test Business\") { message email } }"}

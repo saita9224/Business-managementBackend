@@ -1,0 +1,1 @@
+{"query": "mutation VerifyReg($email: String!, $pin: String!, $name: String!, $password: String!) { verifyRegistration(email: $email, pin: $pin, name: $name, password: $password) { token schemaName isNewUser } }", "variables": {"email": "novababygirl790@gmail.com", "pin": "445855", "name": "Nova Admin", "password": "NovaTest123"}}

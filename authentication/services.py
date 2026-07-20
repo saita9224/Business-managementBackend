@@ -358,9 +358,10 @@ def create_new_tenant_and_admin(
     set_unusable_password: bool = True,
 ) -> tuple:
     from tenants.models import Business, Domain
-    from employees.models import Employee, Role, SocialAccount
+    from employees.models import Employee, Role, RolePermission, Permission, SocialAccount
     from django.db import transaction
     from django.core.management import call_command
+    from employees.permissions_loader import load_permissions
 
     base_slug   = _slugify(business_name)
     schema_name = _unique_schema_name(base_slug)
@@ -406,9 +407,30 @@ def create_new_tenant_and_admin(
     try:
         with schema_context(schema_name):
 
+            # Populate this schema's Permission table from every app's
+            # permissions.py before anything below tries to reference
+            # Permission objects. Idempotent -- see
+            # employees/permissions_loader.py docstring.
+            load_permissions()
+
             with transaction.atomic():
 
                 admin_role, _ = Role.objects.get_or_create(name="Admin")
+
+                # Grant the Admin role every permission that exists in
+                # this tenant's schema. New tenants' admins should have
+                # full access by default. ignore_conflicts makes this
+                # safe even if this function is ever re-run for an
+                # existing tenant (RolePermission has a unique_together
+                # on role+permission).
+                all_permissions = list(Permission.objects.all())
+                RolePermission.objects.bulk_create(
+                    [
+                        RolePermission(role=admin_role, permission=perm)
+                        for perm in all_permissions
+                    ],
+                    ignore_conflicts=True,
+                )
 
                 email = (
                     user_info["email"]
