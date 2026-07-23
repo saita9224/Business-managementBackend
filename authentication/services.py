@@ -18,9 +18,6 @@ ALGORITHM             = getattr(settings, "JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRES  = getattr(settings, "JWT_ACCESS_EXPIRES_SECONDS", 3600)
 MAX_PIN_ATTEMPTS      = getattr(settings, "AUTH_PIN_MAX_ATTEMPTS", 5)
 
-# Domain suffix is configurable per environment.
-# Dev: settings.TENANT_DOMAIN_SUFFIX = "localhost"
-# Prod: settings.TENANT_DOMAIN_SUFFIX = "api.yourdomain.com"
 TENANT_DOMAIN_SUFFIX  = getattr(settings, "TENANT_DOMAIN_SUFFIX", "localhost")
 
 
@@ -87,9 +84,6 @@ async def decode_jwt_token(
         if not employee.is_active:
             return None
 
-        # Stash the schema name on the returned object so callers
-        # (e.g. JWTMiddleware in backend/middleware.py) can activate
-        # it for the rest of the request without re-decoding the token.
         employee._jwt_schema_name = schema_name
 
         return employee
@@ -186,12 +180,6 @@ def build_auth_payload(
 # ======================================================
 # EmailIndex fast-path helpers
 # ======================================================
-#
-# EmailIndex lives in the public schema and maps email -> schema_name.
-# It is a CACHE, not a source of truth. Every lookup that uses it falls
-# back to the full per-tenant scan on a miss, so a stale or missing
-# index entry can never break login -- it can only make that one
-# request slower (same cost as before this change).
 
 def _index_lookup(email: str) -> str | None:
     from tenants.models import EmailIndex
@@ -217,20 +205,12 @@ def _index_delete(email: str) -> None:
     EmailIndex.objects.filter(email__iexact=email).delete()
 
 
-# ======================================================
-# Public wrappers for other apps (e.g. employees/mutations.py)
-# to keep EmailIndex in sync when employees are created,
-# updated, or removed within an existing tenant.
-# ======================================================
-
 def index_employee_email(email: str, schema_name: str) -> None:
-    """Call after creating an employee or changing their email."""
     if email:
         _index_upsert(email, schema_name)
 
 
 def deindex_employee_email(email: str) -> None:
-    """Call after deleting an employee or deactivating them."""
     if email:
         _index_delete(email)
 
@@ -239,7 +219,6 @@ def find_existing_google_user(google_id: str, email: str):
     from tenants.models import Business
     from employees.models import Employee, SocialAccount
 
-    # Fast path: try the schema the index points to first.
     indexed_schema = _index_lookup(email) if email else None
 
     if indexed_schema:
@@ -274,11 +253,8 @@ def find_existing_google_user(google_id: str, email: str):
                 )
                 return employee, indexed_schema
             except Employee.DoesNotExist:
-                # Index was stale -- clean it up and fall through to full scan.
                 _index_delete(email)
 
-    # Slow path: full scan (also covers google_id-only matches where the
-    # stored email differs, or the index missed).
     for tenant in Business.objects.exclude(schema_name="public"):
 
         with schema_context(tenant.schema_name):
@@ -372,11 +348,6 @@ def create_new_tenant_and_admin(
     )
     business.save()
 
-    # Explicitly guarantee TENANT_APPS tables exist in this schema before
-    # writing to it. auto_create_schema is supposed to run this
-    # automatically inside business.save(), but we run it explicitly too
-    # as a safety net -- this is a no-op if migrations already ran, and
-    # fixes the case where the automatic step is skipped or fails silently.
     try:
         call_command(
             "migrate_schemas",
@@ -395,34 +366,21 @@ def create_new_tenant_and_admin(
         business.delete()
         raise
 
-    # Uses the configured suffix instead of a hardcoded ".localhost"
     Domain.objects.create(
         tenant=business,
         domain=f"{schema_name}.{TENANT_DOMAIN_SUFFIX}",
         is_primary=True,
     )
 
-    # Wrapped so a failure here doesn't leave a permanently orphaned
-    # Business + Domain + migrated-but-empty schema behind.
     try:
         with schema_context(schema_name):
 
-            # Populate this schema's Permission table from every app's
-            # permissions.py before anything below tries to reference
-            # Permission objects. Idempotent -- see
-            # employees/permissions_loader.py docstring.
             load_permissions()
 
             with transaction.atomic():
 
                 admin_role, _ = Role.objects.get_or_create(name="Admin")
 
-                # Grant the Admin role every permission that exists in
-                # this tenant's schema. New tenants' admins should have
-                # full access by default. ignore_conflicts makes this
-                # safe even if this function is ever re-run for an
-                # existing tenant (RolePermission has a unique_together
-                # on role+permission).
                 all_permissions = list(Permission.objects.all())
                 RolePermission.objects.bulk_create(
                     [
@@ -468,12 +426,9 @@ def create_new_tenant_and_admin(
             schema_name,
             exc_info=True,
         )
-        # business.delete() actually drops the PostgreSQL schema because
-        # Business.auto_drop_schema = True (see tenants/models.py).
         business.delete()
         raise
 
-    # Keep the fast lookup index in sync at creation time.
     _index_upsert(email, schema_name)
 
     logger.info(
@@ -489,7 +444,6 @@ def find_employee_by_email(email: str):
     from tenants.models import Business
     from employees.models import Employee
 
-    # Fast path via EmailIndex
     indexed_schema = _index_lookup(email)
 
     if indexed_schema:
@@ -502,13 +456,8 @@ def find_employee_by_email(email: str):
                 )
                 return employee, indexed_schema
             except Employee.DoesNotExist:
-                # Stale index entry (email moved schemas, or employee
-                # deactivated/deleted without index cleanup) -- fix it
-                # and fall through to the full scan below.
                 _index_delete(email)
 
-    # Slow path: full scan, same as before. Also self-heals the index
-    # whenever it finds a match this way.
     for tenant in Business.objects.exclude(schema_name="public"):
 
         with schema_context(tenant.schema_name):
@@ -543,6 +492,48 @@ def find_employee_by_email_in_schema(email: str, schema_name: str):
             )
         except Employee.DoesNotExist:
             return None
+
+
+def find_all_employees_by_email(email: str) -> list[dict]:
+    """
+    Scan every tenant schema and return EVERY active employee matching
+    this email — not just the first match. Used only by login(), which
+    needs to know if this email is ambiguous (exists as a valid account
+    in more than one business) before deciding whether to log in
+    directly or ask the user to choose a business.
+
+    Deliberately does NOT use the EmailIndex fast path: the index can
+    only ever point to a single schema per email, so it's structurally
+    incapable of representing "this email exists in multiple tenants."
+    A full scan here is correct by construction. This only runs once
+    per login attempt, not on every authenticated request, so the cost
+    is bounded and acceptable.
+
+    Returns a list of dicts: [{"employee": ..., "schema_name": ...,
+    "business_name": ...}, ...]
+    """
+    from tenants.models import Business
+    from employees.models import Employee
+
+    matches = []
+
+    for tenant in Business.objects.exclude(schema_name="public"):
+        with schema_context(tenant.schema_name):
+            try:
+                employee = (
+                    Employee.objects
+                    .prefetch_related("roles__permissions")
+                    .get(email__iexact=email, is_active=True)
+                )
+                matches.append({
+                    "employee":      employee,
+                    "schema_name":   tenant.schema_name,
+                    "business_name": tenant.name,
+                })
+            except Employee.DoesNotExist:
+                continue
+
+    return matches
 
 
 def _hash_pin(pin: str) -> str:

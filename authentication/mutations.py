@@ -1,6 +1,7 @@
 # authentication/mutations.py
 
 import strawberry
+import typing
 
 from graphql import GraphQLError
 from asgiref.sync import sync_to_async
@@ -8,6 +9,8 @@ from strawberry.types import Info
 
 from .services import (
     find_employee_by_email,
+    find_all_employees_by_email,
+    find_employee_by_email_in_schema,
     build_auth_payload,
     create_pending_registration,
     verify_pending_registration,
@@ -32,6 +35,28 @@ class LoginPayload:
     permissions:       list[str]
     schema_name:       str
     is_email_verified: bool
+
+
+@strawberry.type
+class BusinessChoice:
+    schema_name:   str
+    business_name: str
+
+
+@strawberry.type
+class LoginChoicePayload:
+    """
+    Returned instead of LoginPayload when the email + password pair
+    is valid in more than one business. The client must call
+    loginWithBusiness with the chosen schemaName to complete login.
+    """
+    message: str
+    choices: list[BusinessChoice]
+
+
+# GraphQL union: login() can return either a completed session or a
+# list of businesses to choose from.
+LoginResult = strawberry.union("LoginResult", (LoginPayload, LoginChoicePayload))
 
 
 @strawberry.type
@@ -78,17 +103,80 @@ class AuthMutation:
         info: Info,
         email: str,
         password: str,
+    ) -> LoginResult:
+        """
+        Checks the password-email pair against every business where
+        this email exists. If it's valid in exactly one, logs in
+        directly (unchanged behavior for the common case). If it's
+        valid in more than one, returns a LoginChoicePayload instead
+        of issuing a token — the client must then call
+        loginWithBusiness with the chosen schemaName.
+        """
+        email_clean = email.strip().lower()
+
+        matches = await sync_to_async(find_all_employees_by_email)(email_clean)
+
+        if not matches:
+            raise GraphQLError("Invalid email or password")
+
+        # Check the password against every match — password is what
+        # discriminates which business the user means, before we ever
+        # ask them to choose. Most logins only match one business, so
+        # this resolves immediately without any ambiguity prompt.
+        valid_matches = [
+            m for m in matches
+            if m["employee"].check_password(password)
+        ]
+
+        if not valid_matches:
+            raise GraphQLError("Invalid email or password")
+
+        if len(valid_matches) == 1:
+            match = valid_matches[0]
+            data = await sync_to_async(build_auth_payload)(
+                match["employee"], match["schema_name"]
+            )
+            return LoginPayload(
+                token=             data["token"],
+                user_id=           data["user_id"],
+                name=              data["name"],
+                email=             data["email"],
+                roles=             data["roles"],
+                permissions=       data["permissions"],
+                schema_name=       data["schema_name"],
+                is_email_verified= match["employee"].is_email_verified,
+            )
+
+        # Same email + same password valid in 2+ businesses — ask the
+        # user to choose. No token is issued here since we don't yet
+        # know which tenant's permissions should be in it.
+        return LoginChoicePayload(
+            message="This email is used in more than one business. Please choose which one to log in to.",
+            choices=[
+                BusinessChoice(
+                    schema_name=m["schema_name"],
+                    business_name=m["business_name"],
+                )
+                for m in valid_matches
+            ],
+        )
+
+    @strawberry.mutation
+    async def login_with_business(
+        self,
+        email:       str,
+        password:    str,
+        schema_name: str,
     ) -> LoginPayload:
-        # NOTE: login always arrives through the public schema (/auth/ is
-        # mounted on the bare domain, never a tenant subdomain — see
-        # lib/graphql.js PUBLIC_URL). request.tenant is therefore always
-        # the public tenant here, so we can't resolve which business the
-        # user belongs to from tenant middleware. Instead we search across
-        # all tenant schemas by email, same as googleAuth and the password
-        # reset flow already do.
-        employee, resolved_schema_name = await sync_to_async(
-            find_employee_by_email
-        )(email.strip().lower())
+        """
+        Second step of the disambiguation flow: the client already
+        knows (from a prior LoginChoicePayload) that this email +
+        password is valid in this specific schema. Re-validates and
+        issues a token scoped to that business.
+        """
+        employee = await sync_to_async(find_employee_by_email_in_schema)(
+            email.strip().lower(), schema_name.strip()
+        )
 
         if not employee:
             raise GraphQLError("Invalid email or password")
@@ -96,11 +184,8 @@ class AuthMutation:
         if not employee.check_password(password):
             raise GraphQLError("Invalid email or password")
 
-        # FIX: build_auth_payload does synchronous ORM work
-        # (schema_context, roles/permissions queries) and must be
-        # wrapped in sync_to_async when called from an async resolver.
         data = await sync_to_async(build_auth_payload)(
-            employee, resolved_schema_name
+            employee, schema_name.strip()
         )
 
         return LoginPayload(
@@ -177,8 +262,6 @@ class AuthMutation:
             password,
         )
 
-        # FIX: same issue as login() — build_auth_payload must be
-        # wrapped since it runs synchronous ORM queries.
         data = await sync_to_async(build_auth_payload)(
             employee,
             schema_name,
@@ -239,7 +322,6 @@ class AuthMutation:
         except ValueError as exc:
             raise GraphQLError(str(exc))
 
-        # FIX: same issue — wrap build_auth_payload.
         data = await sync_to_async(build_auth_payload)(
             employee, schema_name
         )
