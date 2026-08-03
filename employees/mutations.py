@@ -4,7 +4,6 @@ import typing
 import strawberry
 from strawberry.types import Info
 from asgiref.sync import sync_to_async
-from django.db import connection
 
 from .decorators import permission_required
 from .types import (
@@ -16,6 +15,11 @@ from .types import (
 )
 from . import services
 from authentication.services import index_employee_email, deindex_employee_email
+
+
+def _get_current_schema_name():
+    from django.db import connection
+    return getattr(connection, "schema_name", None)
 
 
 # ======================================================
@@ -175,7 +179,7 @@ class EmployeeMutation:
         from tenants.models import Business
         from authentication.email_service import send_employee_verification_pin
 
-        schema_name = connection.schema_name
+        schema_name = await sync_to_async(_get_current_schema_name)()
 
         employee, plain_password = await sync_to_async(services.create_employee)(
             name=      data.name,
@@ -227,7 +231,7 @@ class EmployeeMutation:
         password:   typing.Optional[str]            = None,
         role_names: typing.Optional[typing.List[str]] = None,
     ) -> EmployeeType:
-        schema_name = connection.schema_name
+        schema_name = _get_current_schema_name()
 
         # Capture the old email before update_employee overwrites it,
         # so we can de-index it if the email is changing.
@@ -289,7 +293,7 @@ class EmployeeMutation:
         from tenants.models import Business
         from authentication.email_service import send_employee_verification_pin
 
-        schema_name = connection.schema_name
+        schema_name = await sync_to_async(_get_current_schema_name)()
 
         employee, plain_password = await sync_to_async(services.onboard_employee)(
             name=            data.name,
@@ -395,8 +399,9 @@ class EmployeeMutation:
         )(user)
 
         try:
+            schema_name = await sync_to_async(_get_current_schema_name)()
             business = await sync_to_async(Business.objects.get)(
-                schema_name=connection.schema_name
+                schema_name=schema_name
             )
             business_name = business.name
         except Exception:
