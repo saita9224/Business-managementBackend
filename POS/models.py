@@ -66,6 +66,7 @@ class Receipt(models.Model):
     ]
 
     receipt_number = models.CharField(max_length=50, unique=True)
+    client_id      = models.UUIDField(null=True, blank=True, unique=True, db_index=True)
     session = models.ForeignKey(
         POSSession,
         on_delete=models.PROTECT,
@@ -108,6 +109,7 @@ class Order(models.Model):
         on_delete=models.PROTECT,
         related_name="orders"
     )
+    client_id   = models.UUIDField(null=True, blank=True, unique=True, db_index=True)
     is_saved    = models.BooleanField(default=True)
     is_refunded = models.BooleanField(default=False)
     created_at  = models.DateTimeField(auto_now_add=True)

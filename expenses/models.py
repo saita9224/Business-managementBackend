@@ -77,6 +77,13 @@ class ExpenseItem(models.Model):
         db_index=True
     )
 
+    client_id = models.UUIDField(
+        null=True,
+        blank=True,
+        unique=True,
+        db_index=True
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -155,6 +162,13 @@ class ExpensePayment(models.Model):
     amount = models.DecimalField(
         max_digits=12,
         decimal_places=2
+    )
+
+    client_id = models.UUIDField(
+        null=True,
+        blank=True,
+        unique=True,
+        db_index=True
     )
 
     paid_at = models.DateTimeField(

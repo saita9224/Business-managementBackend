@@ -11,7 +11,8 @@ from django.core.exceptions import ValidationError
 # ======================================================
 
 class Category(models.Model):
-    name = models.CharField(max_length=100, unique=True)
+    name       = models.CharField(max_length=100, unique=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["name"]
@@ -45,6 +46,7 @@ class Product(models.Model):
     )
 
     created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["name"]
@@ -132,6 +134,9 @@ class StockMovement(models.Model):
         related_name="stock_movements",
     )
     group_id = models.CharField(max_length=100, null=True, blank=True)
+    client_id = models.UUIDField(
+        null=True, blank=True, unique=True, db_index=True
+    )
 
     receipt = models.ForeignKey(
         "POS.Receipt",
