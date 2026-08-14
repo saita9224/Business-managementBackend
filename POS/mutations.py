@@ -76,6 +76,7 @@ class CreateReceiptInput:
     session_id: strawberry.ID
     discount:   float = 0.0
     table_note: str   = ""
+    client_id:  Optional[str] = None
 
 
 @strawberry.input
@@ -196,11 +197,12 @@ class POSMutation:
             session = await sync_to_async(
                 POSSession.objects.select_related("employee").get
             )(pk=int(input.session_id), is_active=True)
-            receipt = await sync_to_async(svc_create_receipt)(
+            receipt, _ = await sync_to_async(svc_create_receipt)(
                 session=session,
                 created_by=user,
                 discount=input.discount,
                 table_note=input.table_note,
+                client_id=input.client_id,
             )
             return await sync_to_async(_fetch_receipt)(receipt.id)
         except POSSession.DoesNotExist:
@@ -234,10 +236,11 @@ class POSMutation:
         user = info.context.user
         try:
             receipt = await sync_to_async(_fetch_receipt)(int(receipt_id))
-            return await sync_to_async(svc_create_order)(
+            order, _ = await sync_to_async(svc_create_order)(
                 receipt=receipt,
                 created_by=user,
             )
+            return order
         except Receipt.DoesNotExist:
             raise GraphQLError("Receipt not found.")
         except Exception as e:

@@ -99,17 +99,24 @@ def create_expense_item(
     item_name: str,
     unit_price: Decimal | float | str,
     quantity: Decimal | float | str,
+    client_id: str | None = None,
 ) -> dict:
     """
     Create an expense item.
 
     Returns a dict with:
-    - expense: the created ExpenseItem
+    - expense: the ExpenseItem
     - matched_product: an inventory Product if item_name matches one, else None
-
-    The caller (mutation) uses matched_product to tell the frontend
-    whether to prompt the user to add stock.
+    - created: bool indicating whether a new record was created or existing duplicate was returned
     """
+    if client_id:
+        existing = ExpenseItem.objects.filter(client_id=client_id).first()
+        if existing:
+            return {
+                "expense": existing,
+                "matched_product": match_product_by_name(existing.item_name),
+                "created": False,
+            }
 
     supplier = resolve_supplier(supplier_id, supplier_name)
     product = resolve_product(product_id)
@@ -138,6 +145,7 @@ def create_expense_item(
         quantity=quantity,
         unit_price=unit_price,
         total_price=total_price,
+        client_id=client_id,
     )
     expense.full_clean()
     expense.save()
@@ -148,6 +156,7 @@ def create_expense_item(
     return {
         "expense": expense,
         "matched_product": matched_product,
+        "created": True,
     }
 
 

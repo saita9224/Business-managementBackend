@@ -120,6 +120,7 @@ class ExpenseMutation:
                 item_name=data.item_name,
                 unit_price=data.unit_price,
                 quantity=data.quantity,
+                client_id=data.client_id,
             )
 
             expense = result["expense"]

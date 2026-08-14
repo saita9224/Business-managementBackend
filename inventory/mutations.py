@@ -72,6 +72,7 @@ class AddStockInput:
     notes:              Optional[str] = None
     expense_item_id:    Optional[strawberry.ID] = None
     group_id:           Optional[str] = None
+    client_id:          Optional[str] = None
 
 
 @strawberry.input
@@ -80,6 +81,7 @@ class RemoveStockInput:
     quantity:   float
     reason:     str
     notes:      Optional[str] = None
+    client_id:  Optional[str] = None
 
 
 @strawberry.input
@@ -266,7 +268,7 @@ class InventoryMutation:
         expense_item_id = int(input.expense_item_id) if input.expense_item_id else None
 
         try:
-            return await sync_to_async(add_stock_service)(
+            movement, _ = await sync_to_async(add_stock_service)(
                 product=product,
                 quantity=input.quantity,
                 reason=input.reason,
@@ -275,7 +277,9 @@ class InventoryMutation:
                 group_id=input.group_id,
                 notes=input.notes,
                 performed_by=employee,
+                client_id=input.client_id,
             )
+            return movement
         except Exception as e:
             raise GraphQLError(str(e))
 
@@ -298,13 +302,15 @@ class InventoryMutation:
             raise GraphQLError("Product not found")
 
         try:
-            return await sync_to_async(remove_stock_service)(
+            movement, _ = await sync_to_async(remove_stock_service)(
                 product=product,
                 quantity=input.quantity,
                 reason=input.reason,
                 notes=input.notes,
                 performed_by=employee,
+                client_id=input.client_id,
             )
+            return movement
         except Exception as e:
             raise GraphQLError(str(e))
 

@@ -1,3 +1,5 @@
+# POS/models.py
+
 from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify

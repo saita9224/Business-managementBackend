@@ -1,3 +1,5 @@
+# POS/services.py
+
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
 from django.core.exceptions import ValidationError
@@ -153,13 +155,20 @@ def create_receipt(
     created_by: Employee,
     discount: Decimal | float | str = 0,
     table_note: str = "",
-) -> Receipt:
+    client_id: str | None = None,
+) -> tuple[Receipt, bool]:
+    if client_id:
+        existing = Receipt.objects.filter(client_id=client_id).first()
+        if existing:
+            return existing, False
+
     receipt = Receipt(
         receipt_number="PENDING",
         session=session,
         created_by=created_by,
         discount=Decimal(str(discount)),
         table_note=table_note,
+        client_id=client_id,
         status=Receipt.DRAFT,
     )
     receipt.save()
@@ -167,7 +176,7 @@ def create_receipt(
         f"RCP-{datetime.now().strftime('%Y%m%d')}-{str(receipt.id).zfill(4)}"
     )
     receipt.save(update_fields=["receipt_number"])
-    return receipt
+    return receipt, True
 
 
 @transaction.atomic
@@ -204,11 +213,17 @@ def create_order(
     *,
     receipt: Receipt,
     created_by: Employee,
-) -> Order:
-    order = Order(receipt=receipt, created_by=created_by)
+    client_id: str | None = None,
+) -> tuple[Order, bool]:
+    if client_id:
+        existing = Order.objects.filter(client_id=client_id).first()
+        if existing:
+            return existing, False
+
+    order = Order(receipt=receipt, created_by=created_by, client_id=client_id)
     order.full_clean()
     order.save()
-    return order
+    return order, True
 
 
 @transaction.atomic

@@ -46,7 +46,13 @@ def add_stock(
     funded_by_business: bool = True,
     group_id:           str | None = None,
     notes:              str | None = None,
-) -> StockMovement:
+    client_id:          str | None = None,
+) -> tuple[StockMovement, bool]:
+
+    if client_id:
+        existing = StockMovement.objects.filter(client_id=client_id).first()
+        if existing:
+            return existing, False
 
     _validate_quantity(quantity)
     _validate_user(performed_by, "performed_by")
@@ -78,7 +84,7 @@ def add_stock(
                 f"Expense item with ID {expense_item_id} does not exist"
             )
 
-    return StockMovement.objects.create(
+    movement = StockMovement.objects.create(
         product=product,
         quantity=quantity,
         movement_type=StockMovement.IN,
@@ -88,7 +94,9 @@ def add_stock(
         performed_by=performed_by,
         group_id=group_id,
         notes=notes,
+        client_id=client_id,
     )
+    return movement, True
 
 
 # ======================================================
@@ -104,7 +112,13 @@ def remove_stock(
     performed_by,
     group_id:     str | None = None,
     notes:        str | None = None,
-) -> StockMovement:
+    client_id:    str | None = None,
+) -> tuple[StockMovement, bool]:
+
+    if client_id:
+        existing = StockMovement.objects.filter(client_id=client_id).first()
+        if existing:
+            return existing, False
 
     _validate_quantity(quantity)
     _validate_user(performed_by, "performed_by")
@@ -125,7 +139,7 @@ def remove_stock(
             f"Insufficient stock. Available: {available_stock}"
         )
 
-    return StockMovement.objects.create(
+    movement = StockMovement.objects.create(
         product=product,
         quantity=quantity,
         movement_type=StockMovement.OUT,
@@ -133,7 +147,9 @@ def remove_stock(
         performed_by=performed_by,
         group_id=group_id,
         notes=notes,
+        client_id=client_id,
     )
+    return movement, True
 
 
 # ======================================================

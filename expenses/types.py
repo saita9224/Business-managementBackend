@@ -166,6 +166,7 @@ class ExpenseInput:
     item_name: str
     quantity: Decimal
     unit_price: Decimal
+    client_id: Optional[str] = None
 
 
 @strawberry.input
