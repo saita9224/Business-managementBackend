@@ -13,6 +13,7 @@ from POS.dataloaders       import create_pos_dataloaders
 from hr.schema             import HRQuery, HRMutation
 from hr.dataloaders        import create_hr_dataloaders
 from reports.schema        import ReportQuery
+from sync.mutations        import SyncMutation
 
 from .middleware import JWTMiddleware
 
@@ -39,6 +40,7 @@ class Mutation(
     InventoryMutation,
     POSMutation,
     HRMutation,
+    SyncMutation,
 ):
     """Root GraphQL Mutation — composed from app-level mixins."""
     pass

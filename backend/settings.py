@@ -51,6 +51,7 @@ TENANT_APPS = [
     'POS',
     'hr',
     'reports',
+    'sync',
 ]
 
 INSTALLED_APPS = list(SHARED_APPS) + [
