@@ -2,15 +2,22 @@
 
 import uuid
 from types import SimpleNamespace
-import pytest
+from unittest.mock import MagicMock, patch
 
 from sync.types import (
     SyncMutationTypeEnum,
-    SyncMutationInput,
     SyncStatusEnum,
 )
 from sync.mutations import _process_single_sync_item, _process_sync_batch
 from sync.registry import SYNC_MUTATION_REGISTRY
+
+
+class DummyAtomic:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
 
 
 def test_sync_registry_coverage():
@@ -31,3 +38,112 @@ def test_sync_item_unsupported_mutation():
     result = _process_single_sync_item(info, invalid_input)
     assert result.status == SyncStatusEnum.VALIDATION_ERROR
     assert "Unsupported mutation type" in result.error
+
+
+def test_sync_item_permission_denied():
+    mock_user = MagicMock()
+    mock_user.is_active = True
+    mock_user.roles.filter.return_value.exists.return_value = False
+    mock_user.roles.all.return_value.exists.return_value = False
+
+    info = SimpleNamespace(context=SimpleNamespace(user=mock_user))
+    item = SimpleNamespace(
+        client_id=str(uuid.uuid4()),
+        mutation_type=SyncMutationTypeEnum.CREATE_RECEIPT,
+        payload={"session_id": 1},
+    )
+
+    result = _process_single_sync_item(info, item)
+    assert result.status == SyncStatusEnum.PERMISSION_DENIED
+    assert "User has no role assigned" in result.error
+
+
+@patch("sync.mutations.transaction.atomic", return_value=DummyAtomic())
+def test_sync_item_success_handler_dispatch(mock_atomic):
+    mock_user = MagicMock()
+    mock_user.is_active = True
+    mock_user.roles.filter.return_value.exists.return_value = True  # Admin bypass
+
+    client_id = str(uuid.uuid4())
+    info = SimpleNamespace(context=SimpleNamespace(user=mock_user))
+    item = SimpleNamespace(
+        client_id=client_id,
+        mutation_type=SyncMutationTypeEnum.CREATE_RECEIPT,
+        payload={"session_id": 1},
+    )
+
+    dummy_response = {"receipt_id": 100, "receipt_number": "RCP-0001", "status": "DRAFT"}
+    mock_handler = MagicMock(return_value=(True, dummy_response))
+
+    with patch.dict("sync.mutations.SYNC_MUTATION_REGISTRY", {
+        SyncMutationTypeEnum.CREATE_RECEIPT: {
+            "permission": "pos.create_order",
+            "handler": mock_handler,
+        }
+    }):
+        result = _process_single_sync_item(info, item)
+
+    assert result.status == SyncStatusEnum.SUCCESS
+    assert result.client_id == client_id
+    assert result.payload_response == dummy_response
+
+
+@patch("sync.mutations.transaction.atomic", return_value=DummyAtomic())
+def test_sync_item_duplicate_ignored(mock_atomic):
+    mock_user = MagicMock()
+    mock_user.is_active = True
+    mock_user.roles.filter.return_value.exists.return_value = True  # Admin bypass
+
+    client_id = str(uuid.uuid4())
+    info = SimpleNamespace(context=SimpleNamespace(user=mock_user))
+    item = SimpleNamespace(
+        client_id=client_id,
+        mutation_type=SyncMutationTypeEnum.CREATE_RECEIPT,
+        payload={"session_id": 1},
+    )
+
+    dummy_response = {"receipt_id": 100, "receipt_number": "RCP-0001", "status": "DRAFT"}
+    mock_handler = MagicMock(return_value=(False, dummy_response))
+
+    with patch.dict("sync.mutations.SYNC_MUTATION_REGISTRY", {
+        SyncMutationTypeEnum.CREATE_RECEIPT: {
+            "permission": "pos.create_order",
+            "handler": mock_handler,
+        }
+    }):
+        result = _process_single_sync_item(info, item)
+
+    assert result.status == SyncStatusEnum.DUPLICATE_IGNORED
+    assert result.client_id == client_id
+
+
+@patch("sync.mutations.transaction.atomic", return_value=DummyAtomic())
+def test_sync_batch_processing(mock_atomic):
+    mock_user = MagicMock()
+    mock_user.is_active = True
+    mock_user.roles.filter.return_value.exists.return_value = True
+
+    info = SimpleNamespace(context=SimpleNamespace(user=mock_user))
+    item1 = SimpleNamespace(
+        client_id=str(uuid.uuid4()),
+        mutation_type=SyncMutationTypeEnum.CREATE_RECEIPT,
+        payload={"session_id": 1},
+    )
+    item2 = SimpleNamespace(
+        client_id=str(uuid.uuid4()),
+        mutation_type=SyncMutationTypeEnum.CREATE_ORDER,
+        payload={"receipt_id": 100},
+    )
+
+    mock_h1 = MagicMock(return_value=(True, {"receipt_id": 1}))
+    mock_h2 = MagicMock(return_value=(False, {"order_id": 2}))
+
+    with patch.dict("sync.mutations.SYNC_MUTATION_REGISTRY", {
+        SyncMutationTypeEnum.CREATE_RECEIPT: {"permission": "pos.create_order", "handler": mock_h1},
+        SyncMutationTypeEnum.CREATE_ORDER: {"permission": "pos.create_order", "handler": mock_h2},
+    }):
+        results = _process_sync_batch(info, [item1, item2])
+
+    assert len(results) == 2
+    assert results[0].status == SyncStatusEnum.SUCCESS
+    assert results[1].status == SyncStatusEnum.DUPLICATE_IGNORED
