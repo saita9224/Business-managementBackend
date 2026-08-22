@@ -48,3 +48,9 @@ class SyncItemResult:
 @strawberry.type
 class PushSyncPayload:
     results: List[SyncItemResult]
+
+
+@strawberry.type
+class PullSyncResponse:
+    changes: JSON
+    timestamp: float

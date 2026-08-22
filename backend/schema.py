@@ -14,6 +14,7 @@ from hr.schema             import HRQuery, HRMutation
 from hr.dataloaders        import create_hr_dataloaders
 from reports.schema        import ReportQuery
 from sync.mutations        import SyncMutation
+from sync.queries          import SyncQuery
 
 from .middleware import JWTMiddleware
 
@@ -27,6 +28,7 @@ class Query(
     POSQuery,
     HRQuery,
     ReportQuery,
+    SyncQuery,
 ):
     """Root GraphQL Query — composed from app-level mixins."""
     pass
