@@ -6,7 +6,7 @@ from graphql import GraphQLError
 @pytest.mark.django_db
 @pytest.mark.anyio
 async def test_permission_decorator_blocks_unauthorized(employee, info_context):
-    @permission_required("employees.view")
+    @permission_required("employee.view")
     def resolver(root, info):
         return "OK"
 
@@ -19,7 +19,7 @@ async def test_permission_decorator_blocks_unauthorized(employee, info_context):
 @pytest.mark.django_db
 @pytest.mark.anyio
 async def test_permission_decorator_allows_authorized(employee_with_role_permission, info_context):
-    @permission_required("employees.view")
+    @permission_required("employee.view")
     def resolver(root, info):
         return "OK"
 

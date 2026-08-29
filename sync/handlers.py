@@ -4,7 +4,7 @@ from typing import Dict, Any, Tuple
 from django.core.exceptions import ValidationError
 
 from employees.models import Employee
-from POS.models import Receipt, POSSession, MenuItem
+from POS.models import Receipt, POSSession, MenuItem, OrderItem, Payment
 from POS.services import (
     create_receipt as svc_create_receipt,
     create_order as svc_create_order,
@@ -77,6 +77,14 @@ def handle_add_order_item(
 ) -> Tuple[bool, Dict[str, Any]]:
     from POS.models import Order
 
+    existing = OrderItem.objects.filter(client_id=client_id).first()
+    if existing:
+        return False, {
+            "order_item_id": existing.id,
+            "order_id": existing.order_id,
+            "line_total": str(existing.line_total),
+        }
+
     order_id = payload.get("order_id")
     product_id = payload.get("product_id")
     if not order_id or not product_id:
@@ -99,6 +107,7 @@ def handle_add_order_item(
         final_price=payload.get("final_price", 0),
         sold_by=user,
         price_override_reason=payload.get("price_override_reason"),
+        client_id=client_id,
     )
 
     return True, {
@@ -112,6 +121,14 @@ def handle_add_menu_order_item(
     user: Employee, payload: Dict[str, Any], client_id: str
 ) -> Tuple[bool, Dict[str, Any]]:
     from POS.models import Order
+
+    existing = OrderItem.objects.filter(client_id=client_id).first()
+    if existing:
+        return False, {
+            "order_item_id": existing.id,
+            "order_id": existing.order_id,
+            "line_total": str(existing.line_total),
+        }
 
     order_id = payload.get("order_id")
     menu_item_id = payload.get("menu_item_id")
@@ -133,6 +150,7 @@ def handle_add_menu_order_item(
         menu_item=menu_item,
         quantity=payload.get("quantity", 1),
         sold_by=user,
+        client_id=client_id,
     )
 
     return True, {
@@ -170,6 +188,14 @@ def handle_submit_order(
 def handle_accept_payment(
     user: Employee, payload: Dict[str, Any], client_id: str
 ) -> Tuple[bool, Dict[str, Any]]:
+    existing = Payment.objects.filter(client_id=client_id).first()
+    if existing:
+        return False, {
+            "payment_id": existing.id,
+            "receipt_id": existing.receipt_id,
+            "amount": str(existing.amount),
+        }
+
     receipt_id = payload.get("receipt_id")
     amount = payload.get("amount")
     method = payload.get("method")
@@ -181,6 +207,7 @@ def handle_accept_payment(
         amount=amount,
         method=method,
         received_by=user,
+        client_id=client_id,
     )
 
     return True, {

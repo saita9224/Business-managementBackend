@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 import pytest
 
-from sync.pull import extract_pull_changes, _parse_timestamp
+from sync.pull import extract_pull_changes, _parse_timestamp, serialize_menu_item
 from sync.queries import SyncQuery
 
 
@@ -43,6 +43,29 @@ def test_extract_pull_changes_structure(mock_get_table_changes):
         assert "created" in changes[table]
         assert "updated" in changes[table]
         assert "deleted" in changes[table]
+
+
+def test_serialize_menu_item_matches_current_model_fields():
+    menu_item = SimpleNamespace(
+        id=1,
+        name="Tea",
+        category="drinks",
+        emoji="T",
+        price=50,
+        product_id=None,
+        is_available=True,
+        is_pinned=False,
+        created_at=None,
+        updated_at=None,
+    )
+
+    data = serialize_menu_item(menu_item)
+
+    assert data["category"] == "drinks"
+    assert data["emoji"] == "T"
+    assert data["product_id"] is None
+    assert "category_id" not in data
+    assert "image_url" not in data
 
 
 @pytest.mark.anyio

@@ -35,7 +35,7 @@ SYNC_MUTATION_REGISTRY = {
         "handler": handle_submit_order,
     },
     SyncMutationTypeEnum.ACCEPT_PAYMENT: {
-        "permission": "pos.create_order",
+        "permission": "pos.accept_payment",
         "handler": handle_accept_payment,
     },
     SyncMutationTypeEnum.CREATE_EXPENSE: {

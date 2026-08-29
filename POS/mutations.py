@@ -86,6 +86,7 @@ class AddOrderItemInput:
     quantity:              float
     final_price:           float
     price_override_reason: Optional[str] = None
+    client_id:             Optional[str] = None
 
 
 @strawberry.input
@@ -93,6 +94,7 @@ class AddMenuOrderItemInput:
     order_id:     strawberry.ID
     menu_item_id: strawberry.ID
     quantity:     float
+    client_id:    Optional[str] = None
 
 
 @strawberry.input
@@ -100,6 +102,7 @@ class AcceptPaymentInput:
     receipt_id: strawberry.ID
     amount:     float
     method:     str
+    client_id:  Optional[str] = None
 
 
 @strawberry.input
@@ -270,6 +273,7 @@ class POSMutation:
                 price_override_reason=input.price_override_reason,
                 sold_by=user,
                 menu_item=menu_item,
+                client_id=input.client_id,
             )
         except Order.DoesNotExist:
             raise GraphQLError("Order not found.")
@@ -294,6 +298,7 @@ class POSMutation:
                 menu_item=menu_item,
                 quantity=input.quantity,
                 sold_by=user,
+                client_id=input.client_id,
             )
         except Order.DoesNotExist:
             raise GraphQLError("Order not found.")
@@ -361,6 +366,7 @@ class POSMutation:
                 amount=input.amount,
                 method=input.method,
                 received_by=user,
+                client_id=input.client_id,
             )
         except Exception as e:
             raise GraphQLError(str(e))

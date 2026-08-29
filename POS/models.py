@@ -95,6 +95,7 @@ class Receipt(models.Model):
     )
     refunded_at = models.DateTimeField(null=True, blank=True)
     created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.receipt_number
@@ -157,6 +158,8 @@ class OrderItem(models.Model):
         null=True, blank=True,
         related_name="order_items",
     )
+    client_id = models.UUIDField(null=True, blank=True, unique=True, db_index=True)
+    created_at = models.DateTimeField(default=timezone.now)
 
     def __str__(self):
         return f"{self.product_name} x {self.quantity}"
@@ -173,6 +176,7 @@ class Payment(models.Model):
         choices=[("CASH", "Cash"), ("MPESA", "Mpesa"), ("CARD", "Card")]
     )
     amount      = models.DecimalField(max_digits=12, decimal_places=2)
+    client_id   = models.UUIDField(null=True, blank=True, unique=True, db_index=True)
     received_by = models.ForeignKey(
         Employee,
         on_delete=models.PROTECT,
@@ -247,6 +251,7 @@ class MenuCategory(models.Model):
     key        = models.SlugField(max_length=80, unique=True)
     label      = models.CharField(max_length=100, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["label"]
@@ -292,6 +297,7 @@ class MenuItem(models.Model):
         related_name="menu_item",
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-is_pinned", "name"]

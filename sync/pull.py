@@ -48,6 +48,8 @@ def serialize_menu_category(mc: MenuCategory) -> Dict[str, Any]:
         "id": str(mc.id),
         "key": mc.key,
         "label": mc.label,
+        "created_at": _to_epoch_ms(mc.created_at),
+        "updated_at": _to_epoch_ms(mc.updated_at),
     }
 
 
@@ -55,11 +57,12 @@ def serialize_menu_item(mi: MenuItem) -> Dict[str, Any]:
     return {
         "id": str(mi.id),
         "name": mi.name,
-        "category_id": str(mi.category_id) if mi.category_id else None,
+        "category": mi.category,
+        "emoji": mi.emoji,
         "price": float(mi.price),
         "product_id": str(mi.product_id) if mi.product_id else None,
         "is_available": mi.is_available,
-        "image_url": mi.image_url,
+        "is_pinned": mi.is_pinned,
         "created_at": _to_epoch_ms(mi.created_at),
         "updated_at": _to_epoch_ms(mi.updated_at),
     }
@@ -77,6 +80,7 @@ def serialize_receipt(r: Receipt) -> Dict[str, Any]:
         "discount": float(r.discount),
         "table_note": r.table_note,
         "created_at": _to_epoch_ms(r.created_at),
+        "updated_at": _to_epoch_ms(r.updated_at),
         "submitted_at": _to_epoch_ms(r.submitted_at),
     }
 
@@ -94,6 +98,7 @@ def serialize_order(o: Order) -> Dict[str, Any]:
 def serialize_order_item(oi: OrderItem) -> Dict[str, Any]:
     return {
         "id": str(oi.id),
+        "client_id": str(oi.client_id) if oi.client_id else None,
         "order_id": str(oi.order_id),
         "product_id": str(oi.product_id),
         "product_name": oi.product_name,
@@ -101,12 +106,14 @@ def serialize_order_item(oi: OrderItem) -> Dict[str, Any]:
         "listed_price": float(oi.listed_price),
         "final_price": float(oi.final_price),
         "line_total": float(oi.line_total),
+        "created_at": _to_epoch_ms(oi.created_at),
     }
 
 
 def serialize_payment(p: Payment) -> Dict[str, Any]:
     return {
         "id": str(p.id),
+        "client_id": str(p.client_id) if p.client_id else None,
         "receipt_id": str(p.receipt_id),
         "amount": float(p.amount),
         "method": p.method,
@@ -173,9 +180,9 @@ def extract_pull_changes(last_pulled_at: Optional[float]) -> Dict[str, Any]:
     changes = {
         "products": get_table_changes(Product, serialize_product, since_dt, has_updated_at=True),
         "categories": get_table_changes(Category, serialize_category, since_dt, has_updated_at=True),
-        "menu_categories": get_table_changes(MenuCategory, serialize_menu_category, since_dt, has_updated_at=False),
+        "menu_categories": get_table_changes(MenuCategory, serialize_menu_category, since_dt, has_updated_at=True),
         "menu_items": get_table_changes(MenuItem, serialize_menu_item, since_dt, has_updated_at=True),
-        "receipts": get_table_changes(Receipt, serialize_receipt, since_dt, has_updated_at=False),
+        "receipts": get_table_changes(Receipt, serialize_receipt, since_dt, has_updated_at=True),
         "orders": get_table_changes(Order, serialize_order, since_dt, has_updated_at=False),
         "order_items": get_table_changes(OrderItem, serialize_order_item, since_dt, has_updated_at=False),
         "payments": get_table_changes(Payment, serialize_payment, since_dt, has_updated_at=False),

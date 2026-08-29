@@ -236,7 +236,13 @@ def add_order_item(
     sold_by: Employee,
     price_override_reason: str | None = None,
     menu_item: MenuItem | None = None,
+    client_id: str | None = None,
 ) -> OrderItem:
+    if client_id:
+        existing = OrderItem.objects.filter(client_id=client_id).first()
+        if existing:
+            return existing
+
     if quantity <= 0:
         raise ValidationError("Quantity must be greater than zero.")
 
@@ -276,6 +282,7 @@ def add_order_item(
         sold_by=sold_by,
         line_total=line_total,
         menu_item=menu_item,
+        client_id=client_id,
     )
     item.full_clean()
     item.save()
@@ -289,7 +296,13 @@ def add_menu_order_item(
     menu_item: MenuItem,
     quantity: float,
     sold_by: Employee,
+    client_id: str | None = None,
 ) -> OrderItem:
+    if client_id:
+        existing = OrderItem.objects.filter(client_id=client_id).first()
+        if existing:
+            return existing
+
     if quantity <= 0:
         raise ValidationError("Quantity must be greater than zero.")
 
@@ -312,6 +325,7 @@ def add_menu_order_item(
         sold_by=sold_by,
         line_total=line_total,
         menu_item=menu_item,
+        client_id=client_id,
     )
     item.full_clean()
     item.save()
@@ -363,7 +377,9 @@ def submit_order(
             try:
                 product = Product.objects.get(pk=item.product_id)
             except Product.DoesNotExist:
-                inventory_error = f"Product {item.product_id} not found in inventory"
+                raise ValidationError(
+                    f"Product {item.product_id} not found in inventory"
+                )
 
             if emit_stock and product is not None and product.auto_deduct_on_sale:
                 try:
@@ -377,9 +393,9 @@ def submit_order(
                         )
                         inventory_deducted = True
                 except ValidationError as exc:
-                    inventory_error = str(exc)
+                    raise ValidationError(str(exc))
                 except Exception as exc:
-                    inventory_error = f"Unexpected error: {str(exc)}"
+                    raise ValidationError(f"Unexpected inventory error: {str(exc)}")
 
             if product is not None:
                 POSStockMovement.objects.create(
@@ -443,7 +459,9 @@ def recall_order(
     receipt.submitted_at = None
     receipt.subtotal     = Decimal("0.00")
     receipt.total        = Decimal("0.00")
-    receipt.save(update_fields=["status", "submitted_at", "subtotal", "total"])
+    receipt.save(update_fields=[
+        "status", "submitted_at", "subtotal", "total", "updated_at",
+    ])
     return receipt
 
 
@@ -456,7 +474,13 @@ def accept_payment(
     amount: Decimal | float | str,
     method: str,
     received_by: Employee,
+    client_id: str | None = None,
 ) -> Payment:
+    if client_id:
+        existing = Payment.objects.filter(client_id=client_id).first()
+        if existing:
+            return existing
+
 
     amount = Decimal(str(amount)).quantize(TWO, rounding=ROUND_HALF_UP)
     if amount <= 0:
@@ -480,12 +504,13 @@ def accept_payment(
         amount=amount,
         method=method,
         received_by=received_by,
+        client_id=client_id,
     )
     payment.full_clean()
     payment.save()
 
     receipt.status = Receipt.PAID if amount == balance else Receipt.OPEN
-    receipt.save(update_fields=["status"])
+    receipt.save(update_fields=["status", "updated_at"])
     return payment
 
 
@@ -506,11 +531,17 @@ def create_credit_account(
             f"Cannot create credit on a {receipt.status} receipt."
         )
 
+    paid = sum(p.amount for p in receipt.payments.all())
+    balance = (receipt.total - paid).quantize(TWO, rounding=ROUND_HALF_UP)
+
+    if balance <= 0:
+        raise ValidationError("Receipt has no outstanding balance for credit.")
+
     credit = CreditAccount(
         receipt=receipt,
         customer_name=customer_name,
         customer_phone=customer_phone or "",
-        credit_amount=receipt.total,
+        credit_amount=balance,
         due_date=due_date,
         approved_by=approved_by,
     )
@@ -518,7 +549,7 @@ def create_credit_account(
     credit.save()
 
     receipt.status = Receipt.CREDIT
-    receipt.save(update_fields=["status"])
+    receipt.save(update_fields=["status", "updated_at"])
     return credit
 
 
@@ -564,7 +595,7 @@ def settle_credit(
         credit.settled_at = timezone.now()
         credit.save(update_fields=["is_settled", "settled_by", "settled_at"])
         receipt.status = Receipt.PAID
-        receipt.save(update_fields=["status"])
+        receipt.save(update_fields=["status", "updated_at"])
 
     return payment
 

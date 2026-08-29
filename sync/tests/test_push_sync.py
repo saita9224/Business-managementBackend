@@ -10,6 +10,7 @@ from sync.types import (
 )
 from sync.mutations import _process_single_sync_item, _process_sync_batch
 from sync.registry import SYNC_MUTATION_REGISTRY
+from sync.handlers import handle_add_order_item, handle_accept_payment
 
 
 class DummyAtomic:
@@ -26,6 +27,13 @@ def test_sync_registry_coverage():
         assert item in SYNC_MUTATION_REGISTRY
         assert "permission" in SYNC_MUTATION_REGISTRY[item]
         assert "handler" in SYNC_MUTATION_REGISTRY[item]
+
+
+def test_accept_payment_sync_uses_payment_permission():
+    assert (
+        SYNC_MUTATION_REGISTRY[SyncMutationTypeEnum.ACCEPT_PAYMENT]["permission"]
+        == "pos.accept_payment"
+    )
 
 
 def test_sync_item_unsupported_mutation():
@@ -147,3 +155,39 @@ def test_sync_batch_processing(mock_atomic):
     assert len(results) == 2
     assert results[0].status == SyncStatusEnum.SUCCESS
     assert results[1].status == SyncStatusEnum.DUPLICATE_IGNORED
+
+
+@patch("sync.handlers.OrderItem")
+def test_add_order_item_duplicate_replay_returns_existing(mock_order_item):
+    existing = MagicMock()
+    existing.id = 10
+    existing.order_id = 20
+    existing.line_total = "30.00"
+    mock_order_item.objects.filter.return_value.first.return_value = existing
+
+    created, payload = handle_add_order_item(
+        MagicMock(),
+        {"order_id": 20, "product_id": 1},
+        str(uuid.uuid4()),
+    )
+
+    assert created is False
+    assert payload["order_item_id"] == 10
+
+
+@patch("sync.handlers.Payment")
+def test_accept_payment_duplicate_replay_returns_existing(mock_payment):
+    existing = MagicMock()
+    existing.id = 10
+    existing.receipt_id = 20
+    existing.amount = "30.00"
+    mock_payment.objects.filter.return_value.first.return_value = existing
+
+    created, payload = handle_accept_payment(
+        MagicMock(),
+        {"receipt_id": 20, "amount": 30, "method": "CASH"},
+        str(uuid.uuid4()),
+    )
+
+    assert created is False
+    assert payload["payment_id"] == 10
