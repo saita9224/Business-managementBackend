@@ -3,13 +3,15 @@
 import strawberry
 from django.contrib import admin
 from django.conf import settings
-from django.urls import path
+from django.conf.urls.static import static
+from django.urls import path, include
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from strawberry.django.views import AsyncGraphQLView
 
 from authentication.social_mutations import SocialAuthMutation
 from authentication.mutations import AuthMutation
+
 
 from expenses.dataloaders  import create_expenses_dataloaders
 from inventory.dataloaders import create_inventory_dataloaders
@@ -207,6 +209,8 @@ def platform_status(request):
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("status/", platform_status),
+    path("api/tenants/", include("tenants.urls")),
+    path("tenants/", include("tenants.urls")),
 
     # Public auth — googleAuth, requestRegistration, verifyRegistration, login
     path(
@@ -243,3 +247,6 @@ urlpatterns = [
         ),
     ),
 ]
+
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+

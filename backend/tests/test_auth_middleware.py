@@ -13,6 +13,7 @@ def test_middleware_sets_user(client, employee_factory):
     response = client.post(
         "/graphql/",
         {"query": "{ roles { id } }"},
+        content_type="application/json",
         HTTP_AUTHORIZATION=f"Bearer {token}"
     )
 
@@ -25,6 +26,7 @@ def test_middleware_invalid_token_sets_user_none(client):
     response = client.post(
         "/graphql/",
         {"query": "{ roles { id } }"},
+        content_type="application/json",
         HTTP_AUTHORIZATION="Bearer invalid.token.here"
     )
 

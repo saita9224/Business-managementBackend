@@ -165,14 +165,20 @@ USE_TZ        = True
 # ======================================================
 # STATIC FILES
 # ======================================================
-STATIC_URL  = 'static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_URL  = config('STATIC_URL', default='static/')
+STATIC_ROOT = Path(config('STATIC_ROOT', default=str(BASE_DIR / 'staticfiles')))
 
 # ======================================================
 # MEDIA FILES (user uploads)
 # ======================================================
-MEDIA_URL  = 'media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL  = config('MEDIA_URL', default='/media/')
+MEDIA_ROOT = Path(config('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
+MAX_BUSINESS_LOGO_BYTES = config(
+    'MAX_BUSINESS_LOGO_BYTES',
+    default=2 * 1024 * 1024,
+    cast=int,
+)
+
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

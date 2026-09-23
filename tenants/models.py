@@ -7,8 +7,20 @@ from django.contrib.auth.hashers import make_password, check_password
 from datetime import timedelta
 
 
+import os
+import uuid
+
+
+def tenant_logo_path(instance, filename):
+    ext = filename.split('.')[-1]
+    name_id = instance.id if instance.id else uuid.uuid4().hex[:8]
+    filename = f"business_{name_id}_{uuid.uuid4().hex[:8]}.{ext}"
+    return os.path.join('logos', filename)
+
+
 class Business(TenantMixin):
     name       = models.CharField(max_length=200)
+    logo       = models.ImageField(upload_to=tenant_logo_path, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     auto_create_schema = True
@@ -21,6 +33,7 @@ class Business(TenantMixin):
 
     def __str__(self):
         return self.name
+
 
 
 class Domain(DomainMixin):

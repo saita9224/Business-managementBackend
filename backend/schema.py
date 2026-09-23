@@ -16,6 +16,7 @@ from reports.schema        import ReportQuery
 from sync.mutations        import SyncMutation
 from sync.queries          import SyncQuery
 
+from tenants.schema     import TenantQuery, TenantMutation
 from .middleware import JWTMiddleware
 
 
@@ -29,6 +30,7 @@ class Query(
     HRQuery,
     ReportQuery,
     SyncQuery,
+    TenantQuery,
 ):
     """Root GraphQL Query — composed from app-level mixins."""
     pass
@@ -43,6 +45,7 @@ class Mutation(
     POSMutation,
     HRMutation,
     SyncMutation,
+    TenantMutation,
 ):
     """Root GraphQL Mutation — composed from app-level mixins."""
     pass
