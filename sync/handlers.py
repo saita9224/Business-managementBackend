@@ -13,7 +13,10 @@ from POS.services import (
     submit_order as svc_submit_order,
     accept_payment as svc_accept_payment,
 )
-from expenses.services import create_expense_item as svc_create_expense_item
+from expenses.services import (
+    create_expense_item as svc_create_expense_item,
+    record_payment as svc_record_payment,
+)
 from inventory.models import Product
 from inventory.services import (
     add_stock as svc_add_stock,
@@ -239,10 +242,30 @@ def handle_create_expense(
     expense = result["expense"]
     created = result["created"]
 
+    amount_paid = payload.get("amount_paid")
+    if amount_paid is not None and float(amount_paid) > 0 and created:
+        svc_record_payment(expense_id=expense.id, amount=amount_paid)
+
     return created, {
         "expense_id": expense.id,
         "item_name": expense.item_name,
         "total_price": str(expense.total_price),
+    }
+    
+
+def handle_pay_balance(
+    user: Employee, payload: Dict[str, Any], client_id: str
+) -> Tuple[bool, Dict[str, Any]]:
+    expense_id = payload.get("expense_id") or payload.get("expenseId")
+    amount = payload.get("amount")
+    if not expense_id or amount is None:
+        raise ValidationError("expense_id and amount are required in payload")
+
+    result = svc_record_payment(expense_id=int(expense_id), amount=amount)
+    return True, {
+        "expense_id": expense_id,
+        "amount_paid": str(result.get("amount_paid", amount)),
+        "balance": str(result.get("balance", "0")),
     }
 
 

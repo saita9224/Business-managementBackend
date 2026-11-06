@@ -15,6 +15,7 @@ class SyncMutationTypeEnum(enum.Enum):
     SUBMIT_ORDER        = "SUBMIT_ORDER"
     ACCEPT_PAYMENT      = "ACCEPT_PAYMENT"
     CREATE_EXPENSE      = "CREATE_EXPENSE"
+    PAY_BALANCE         = "PAY_BALANCE"
     ADD_STOCK          = "ADD_STOCK"
     REMOVE_STOCK       = "REMOVE_STOCK"
 

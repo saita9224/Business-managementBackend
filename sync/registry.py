@@ -9,6 +9,7 @@ from .handlers import (
     handle_submit_order,
     handle_accept_payment,
     handle_create_expense,
+    handle_pay_balance,
     handle_add_stock,
     handle_remove_stock,
 )
@@ -41,6 +42,10 @@ SYNC_MUTATION_REGISTRY = {
     SyncMutationTypeEnum.CREATE_EXPENSE: {
         "permission": "expenses.create",
         "handler": handle_create_expense,
+    },
+    SyncMutationTypeEnum.PAY_BALANCE: {
+        "permission": "expenses.pay",
+        "handler": handle_pay_balance,
     },
     SyncMutationTypeEnum.ADD_STOCK: {
         "permission": "inventory.stock.in",
