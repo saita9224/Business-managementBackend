@@ -12,6 +12,11 @@ from .handlers import (
     handle_pay_balance,
     handle_add_stock,
     handle_remove_stock,
+    handle_create_category,
+    handle_create_product,
+    handle_create_product_with_stock,
+    handle_add_stock_from_expense,
+    handle_refund_receipt,
 )
 
 SYNC_MUTATION_REGISTRY = {
@@ -55,4 +60,9 @@ SYNC_MUTATION_REGISTRY = {
         "permission": "inventory.stock.out",
         "handler": handle_remove_stock,
     },
+    SyncMutationTypeEnum.CREATE_CATEGORY: {"permission": "inventory.product.create", "handler": handle_create_category},
+    SyncMutationTypeEnum.CREATE_PRODUCT: {"permission": "inventory.product.create", "handler": handle_create_product},
+    SyncMutationTypeEnum.CREATE_PRODUCT_WITH_STOCK: {"permission": "inventory.product.create", "handler": handle_create_product_with_stock},
+    SyncMutationTypeEnum.ADD_STOCK_FROM_EXPENSE: {"permission": "inventory.stock.in", "handler": handle_add_stock_from_expense},
+    SyncMutationTypeEnum.REFUND_RECEIPT: {"permission": "pos.refund_order", "handler": handle_refund_receipt},
 }

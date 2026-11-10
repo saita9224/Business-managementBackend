@@ -49,7 +49,7 @@ def delete_supplier(supplier_id: int) -> bool:
 def resolve_supplier(
     supplier_id: int | None,
     supplier_name: str | None,
-) -> Supplier:
+) -> Supplier | None:
     if supplier_id:
         supplier = Supplier.objects.filter(id=supplier_id).first()
         if not supplier:
@@ -63,13 +63,16 @@ def resolve_supplier(
         supplier, _ = Supplier.objects.get_or_create(name=cleaned.title())
         return supplier
 
-    raise ValidationError("Supplier is required.")
+    return None
 
 
 def resolve_product(product_id: int | None) -> Product | None:
     if not product_id:
         return None
-    return Product.objects.filter(id=product_id).first()
+    try:
+        return Product.objects.filter(id=int(product_id)).first()
+    except (TypeError, ValueError):
+        return Product.objects.filter(client_id=str(product_id)).first()
 
 
 # --------------------------------------------------
@@ -100,6 +103,15 @@ def create_expense_item(
     unit_price: Decimal | float | str,
     quantity: Decimal | float | str,
     client_id: str | None = None,
+    inventory_action: str | None = None,
+    inventory_product_id: int | None = None,
+    product_name: str | None = None,
+    product_unit: str | None = None,
+    category_id: int | None = None,
+    auto_deduct_on_sale: bool = False,
+    product_client_id: str | None = None,
+    initial_payment: Decimal | float | str | None = None,
+    performed_by=None,
 ) -> dict:
     """
     Create an expense item.
@@ -119,7 +131,34 @@ def create_expense_item(
             }
 
     supplier = resolve_supplier(supplier_id, supplier_name)
-    product = resolve_product(product_id)
+    from inventory.models import Category, StockMovement
+
+    action = (inventory_action or "NONE").upper()
+    product = resolve_product(inventory_product_id or product_id)
+    if action == "ADD_EXISTING":
+        product = product or match_product_by_name(item_name)
+        if not product:
+            raise ValidationError("Selected inventory product was not found")
+    elif action == "CREATE_PRODUCT":
+        cleaned_product_name = (product_name or item_name or "").strip()
+        if not cleaned_product_name:
+            raise ValidationError("Product name is required")
+        category = Category.objects.filter(pk=category_id).first() if category_id else None
+        product, _ = Product.objects.get_or_create(
+            name__iexact=cleaned_product_name,
+            defaults={
+                "name": cleaned_product_name,
+                "unit": product_unit or "pcs",
+                "category": category,
+                "auto_deduct_on_sale": auto_deduct_on_sale,
+                "client_id": product_client_id,
+            },
+        )
+        if product_client_id and product.client_id is None:
+            product.client_id = product_client_id
+            product.save(update_fields=["client_id"])
+    elif action != "NONE":
+        raise ValidationError("inventory_action must be NONE, ADD_EXISTING, or CREATE_PRODUCT")
 
     unit_price = to_decimal(unit_price, "unit_price")
     quantity = to_decimal(quantity, "quantity")
@@ -150,8 +189,22 @@ def create_expense_item(
     expense.full_clean()
     expense.save()
 
+    if initial_payment is not None and to_decimal(initial_payment, "amount_paid") > 0:
+        record_payment(expense_id=expense.id, amount=initial_payment)
+
     # 👇 Check if item_name matches an existing inventory product
     matched_product = match_product_by_name(cleaned_item)
+    if action in {"ADD_EXISTING", "CREATE_PRODUCT"}:
+        StockMovement.objects.create(
+            product=product,
+            quantity=quantity,
+            movement_type=StockMovement.IN,
+            reason=StockMovement.PURCHASE,
+            expense_item=expense,
+            funded_by_business=True,
+            performed_by=performed_by,
+        )
+        matched_product = product
 
     return {
         "expense": expense,

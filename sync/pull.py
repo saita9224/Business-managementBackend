@@ -26,9 +26,11 @@ def _to_epoch_ms(dt: Optional[datetime]) -> Optional[int]:
 def serialize_product(p: Product) -> Dict[str, Any]:
     return {
         "id": str(p.id),
+        "client_id": str(p.client_id) if p.client_id else None,
         "name": p.name,
         "category_id": str(p.category_id) if p.category_id else None,
         "unit": p.unit,
+        "current_stock": float(p.current_stock),
         "auto_deduct_on_sale": p.auto_deduct_on_sale,
         "created_at": _to_epoch_ms(p.created_at),
         "updated_at": _to_epoch_ms(p.updated_at),
@@ -38,6 +40,7 @@ def serialize_product(p: Product) -> Dict[str, Any]:
 def serialize_category(c: Category) -> Dict[str, Any]:
     return {
         "id": str(c.id),
+        "client_id": str(c.client_id) if c.client_id else None,
         "name": c.name,
         "updated_at": _to_epoch_ms(c.updated_at),
     }
@@ -122,6 +125,8 @@ def serialize_payment(p: Payment) -> Dict[str, Any]:
 
 
 def serialize_expense(e: ExpenseItem) -> Dict[str, Any]:
+    from django.db.models import Sum
+    paid = e.payments.aggregate(total=Sum("amount"))["total"] or 0
     return {
         "id": str(e.id),
         "client_id": str(e.client_id) if e.client_id else None,
@@ -131,6 +136,10 @@ def serialize_expense(e: ExpenseItem) -> Dict[str, Any]:
         "quantity": float(e.quantity),
         "unit_price": float(e.unit_price),
         "total_price": float(e.total_price),
+        "amount_paid": float(paid),
+        "balance": float(e.total_price - paid),
+        "is_fully_paid": paid >= e.total_price,
+        "supplier_name": e.supplier.name if e.supplier else "",
         "created_at": _to_epoch_ms(e.created_at),
     }
 

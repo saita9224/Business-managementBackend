@@ -167,6 +167,14 @@ class ExpenseInput:
     quantity: Decimal
     unit_price: Decimal
     client_id: Optional[str] = None
+    inventory_action: Optional[str] = None
+    inventory_product_id: Optional[str] = None
+    product_name: Optional[str] = None
+    product_unit: Optional[str] = None
+    category_id: Optional[str] = None
+    auto_deduct_on_sale: bool = False
+    amount_paid: Optional[Decimal] = None
+    product_client_id: Optional[str] = None
 
 
 @strawberry.input

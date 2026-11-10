@@ -608,12 +608,32 @@ def refund_receipt(
     receipt_id: int,
     reason: str,
     refunded_by: Employee,
+    restock_inventory: bool = False,
 ) -> Receipt:
 
     receipt = Receipt.objects.select_for_update().get(pk=receipt_id)
 
     if receipt.status not in {Receipt.PAID, Receipt.CREDIT}:
         raise ValidationError("Only paid or credit receipts can be refunded.")
+
+    # A refund does not imply that goods are physically returned. Restore only
+    # the quantities the POS submission actually deducted, when requested.
+    if restock_inventory:
+        from inventory.services import add_stock
+        for movement in receipt.stock_movements.select_related("product").filter(
+            deducted_from_inventory=True
+        ):
+            add_stock(
+                product=movement.product,
+                quantity=float(movement.quantity),
+                reason=StockMovement.RETURN,
+                performed_by=refunded_by,
+                funded_by_business=False,
+                notes=f"Restocked from refund {receipt.receipt_number}",
+            )
+            movement.deducted_from_inventory = False
+            movement.notes = "Restocked on refund"
+            movement.save(update_fields=["deducted_from_inventory", "notes"])
 
     receipt.status        = Receipt.REFUNDED
     receipt.refund_reason = reason

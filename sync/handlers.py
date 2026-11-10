@@ -4,7 +4,7 @@ from typing import Dict, Any, Tuple
 from django.core.exceptions import ValidationError
 
 from employees.models import Employee
-from POS.models import Receipt, POSSession, MenuItem, OrderItem, Payment
+from POS.models import Receipt, POSSession, MenuItem, OrderItem, Payment, Order
 from POS.services import (
     create_receipt as svc_create_receipt,
     create_order as svc_create_order,
@@ -22,6 +22,18 @@ from inventory.services import (
     add_stock as svc_add_stock,
     remove_stock as svc_remove_stock,
 )
+
+
+def _resolve(model, value):
+    """Resolve either a server primary key or an offline client UUID."""
+    if value in (None, ""):
+        return None
+    try:
+        return model.objects.get(pk=int(value))
+    except (ValueError, TypeError, model.DoesNotExist):
+        if any(field.name == "client_id" for field in model._meta.fields):
+            return model.objects.filter(client_id=str(value)).first()
+        return None
 
 
 def handle_create_receipt(
@@ -54,12 +66,14 @@ def handle_create_receipt(
 def handle_create_order(
     user: Employee, payload: Dict[str, Any], client_id: str
 ) -> Tuple[bool, Dict[str, Any]]:
-    receipt_id = payload.get("receipt_id")
+    receipt_id = payload.get("receipt_id") or payload.get("receiptId")
     if not receipt_id:
         raise ValidationError("receipt_id is required in payload")
 
     try:
-        receipt = Receipt.objects.get(pk=int(receipt_id))
+        receipt = _resolve(Receipt, receipt_id)
+        if receipt is None:
+            raise Receipt.DoesNotExist
     except Receipt.DoesNotExist:
         raise ValidationError(f"Receipt with ID {receipt_id} not found")
 
@@ -88,18 +102,22 @@ def handle_add_order_item(
             "line_total": str(existing.line_total),
         }
 
-    order_id = payload.get("order_id")
+    order_id = payload.get("order_id") or payload.get("orderId")
     product_id = payload.get("product_id")
     if not order_id or not product_id:
         raise ValidationError("order_id and product_id are required in payload")
 
     try:
-        order = Order.objects.get(pk=int(order_id))
+        order = _resolve(Order, order_id)
+        if order is None:
+            raise Order.DoesNotExist
     except Order.DoesNotExist:
         raise ValidationError(f"Order with ID {order_id} not found")
 
     try:
-        product = Product.objects.get(pk=int(product_id))
+        product = _resolve(Product, product_id)
+        if product is None:
+            raise Product.DoesNotExist
     except Product.DoesNotExist:
         raise ValidationError(f"Product with ID {product_id} not found")
 
@@ -133,13 +151,15 @@ def handle_add_menu_order_item(
             "line_total": str(existing.line_total),
         }
 
-    order_id = payload.get("order_id")
+    order_id = payload.get("order_id") or payload.get("orderId")
     menu_item_id = payload.get("menu_item_id")
     if not order_id or not menu_item_id:
         raise ValidationError("order_id and menu_item_id are required in payload")
 
     try:
-        order = Order.objects.get(pk=int(order_id))
+        order = _resolve(Order, order_id)
+        if order is None:
+            raise Order.DoesNotExist
     except Order.DoesNotExist:
         raise ValidationError(f"Order with ID {order_id} not found")
 
@@ -166,12 +186,14 @@ def handle_add_menu_order_item(
 def handle_submit_order(
     user: Employee, payload: Dict[str, Any], client_id: str
 ) -> Tuple[bool, Dict[str, Any]]:
-    receipt_id = payload.get("receipt_id")
+    receipt_id = payload.get("receipt_id") or payload.get("receiptId")
     if not receipt_id:
         raise ValidationError("receipt_id is required in payload")
 
     try:
-        receipt = Receipt.objects.get(pk=int(receipt_id))
+        receipt = _resolve(Receipt, receipt_id)
+        if receipt is None:
+            raise Receipt.DoesNotExist
     except Receipt.DoesNotExist:
         raise ValidationError(f"Receipt with ID {receipt_id} not found")
 
@@ -199,14 +221,17 @@ def handle_accept_payment(
             "amount": str(existing.amount),
         }
 
-    receipt_id = payload.get("receipt_id")
+    receipt_id = payload.get("receipt_id") or payload.get("receiptId")
     amount = payload.get("amount")
     method = payload.get("method")
     if not receipt_id or amount is None or not method:
         raise ValidationError("receipt_id, amount, and method are required in payload")
 
+    receipt = _resolve(Receipt, receipt_id)
+    if not receipt:
+        raise ValidationError(f"Receipt {receipt_id} not found")
     payment = svc_accept_payment(
-        receipt_id=int(receipt_id),
+        receipt_id=receipt.id,
         amount=amount,
         method=method,
         received_by=user,
@@ -229,6 +254,16 @@ def handle_create_expense(
     if not item_name or unit_price is None or quantity is None:
         raise ValidationError("item_name, unit_price, and quantity are required in payload")
 
+    amount_paid = payload.get("amount_paid")
+    if amount_paid is not None and float(amount_paid) > 0:
+        from employees.models import RolePermission
+        is_admin = user.roles.filter(name__iexact="Admin").exists()
+        can_pay = RolePermission.objects.filter(
+            role__in=user.roles.all(), permission__code="expenses.pay"
+        ).exists()
+        if not (is_admin or can_pay):
+            raise ValidationError("Permission denied: expenses.pay")
+
     result = svc_create_expense_item(
         supplier_id=payload.get("supplier_id"),
         supplier_name=payload.get("supplier_name"),
@@ -237,19 +272,25 @@ def handle_create_expense(
         unit_price=unit_price,
         quantity=quantity,
         client_id=client_id,
+        inventory_action=payload.get("inventory_action"),
+        inventory_product_id=payload.get("inventory_product_id"),
+        product_name=payload.get("product_name"),
+        product_unit=payload.get("product_unit"),
+        category_id=payload.get("category_id"),
+        auto_deduct_on_sale=payload.get("auto_deduct_on_sale", False),
+        product_client_id=payload.get("product_client_id"),
+        initial_payment=payload.get("amount_paid"),
+        performed_by=user,
     )
 
     expense = result["expense"]
     created = result["created"]
 
-    amount_paid = payload.get("amount_paid")
-    if amount_paid is not None and float(amount_paid) > 0 and created:
-        svc_record_payment(expense_id=expense.id, amount=amount_paid)
-
     return created, {
         "expense_id": expense.id,
         "item_name": expense.item_name,
         "total_price": str(expense.total_price),
+        "product_id": expense.product_id,
     }
     
 
@@ -261,7 +302,11 @@ def handle_pay_balance(
     if not expense_id or amount is None:
         raise ValidationError("expense_id and amount are required in payload")
 
-    result = svc_record_payment(expense_id=int(expense_id), amount=amount)
+    from expenses.models import ExpenseItem
+    expense = _resolve(ExpenseItem, expense_id)
+    if not expense:
+        raise ValidationError(f"Expense {expense_id} not found")
+    result = svc_record_payment(expense_id=expense.id, amount=amount)
     return True, {
         "expense_id": expense_id,
         "amount_paid": str(result.get("amount_paid", amount)),
@@ -279,7 +324,9 @@ def handle_add_stock(
         raise ValidationError("product_id, quantity, and reason are required in payload")
 
     try:
-        product = Product.objects.get(pk=int(product_id))
+        product = _resolve(Product, product_id)
+        if product is None:
+            raise Product.DoesNotExist
     except Product.DoesNotExist:
         raise ValidationError(f"Product with ID {product_id} not found")
 
@@ -312,7 +359,9 @@ def handle_remove_stock(
         raise ValidationError("product_id, quantity, and reason are required in payload")
 
     try:
-        product = Product.objects.get(pk=int(product_id))
+        product = _resolve(Product, product_id)
+        if product is None:
+            raise Product.DoesNotExist
     except Product.DoesNotExist:
         raise ValidationError(f"Product with ID {product_id} not found")
 
@@ -331,3 +380,115 @@ def handle_remove_stock(
         "movement_type": movement.movement_type,
         "quantity": float(movement.quantity),
     }
+
+
+def handle_create_category(user, payload, client_id):
+    from inventory.models import Category
+    category = Category.objects.filter(client_id=client_id).first()
+    created = category is None
+    if category is None:
+        category, _ = Category.objects.get_or_create(
+            name__iexact=(payload.get("name") or "").strip(),
+            defaults={"name": (payload.get("name") or "").strip(), "client_id": client_id},
+        )
+        if category.client_id is None:
+            category.client_id = client_id
+            category.save(update_fields=["client_id"])
+    return created, {"category_id": category.id}
+
+
+def handle_create_product(user, payload, client_id):
+    from inventory.models import Category
+    category = _resolve(Category, payload.get("category_id"))
+    name = (payload.get("name") or "").strip()
+    product = Product.objects.filter(client_id=client_id).first()
+    if product:
+        created = False
+    else:
+        product = Product.objects.filter(name__iexact=name).first()
+        created = product is None
+        if product is None:
+            product = Product.objects.create(
+                name=name, unit=payload.get("unit") or "pcs", category=category,
+                auto_deduct_on_sale=payload.get("auto_deduct_on_sale", False),
+                client_id=client_id,
+            )
+        elif product.client_id is None:
+            product.client_id = client_id
+            product.save(update_fields=["client_id"])
+    if created and float(payload.get("quantity") or 0) > 0:
+        reason = payload.get("reason") or "ADJUSTMENT"
+        if reason == "PURCHASE":
+            reason = "ADJUSTMENT"
+        svc_add_stock(
+            product=product,
+            quantity=float(payload["quantity"]),
+            reason=reason,
+            performed_by=user,
+            funded_by_business=False,
+            notes=payload.get("notes"),
+        )
+    return created, {"product_id": product.id}
+
+
+def handle_create_product_with_stock(user, payload, client_id):
+    from expenses.models import ExpenseItem
+    from inventory.models import Category
+    category = _resolve(Category, payload.get("category_id"))
+    expense = _resolve(ExpenseItem, payload.get("expense_item_id"))
+    if not expense:
+        raise ValidationError("Expense item not found for initial stock")
+    product, _ = Product.objects.get_or_create(
+        name__iexact=(payload.get("name") or "").strip(),
+        defaults={
+            "name": (payload.get("name") or "").strip(),
+            "unit": payload.get("unit") or "pcs",
+            "category": category,
+            "auto_deduct_on_sale": payload.get("auto_deduct_on_sale", False),
+            "client_id": client_id,
+        },
+    )
+    if product.client_id is None:
+        product.client_id = client_id
+        product.save(update_fields=["client_id"])
+    if product.movements.filter(expense_item=expense, reason="PURCHASE").exists():
+        return False, {"product_id": product.id}
+    from inventory.models import StockMovement
+    StockMovement.objects.create(
+        product=product, quantity=payload.get("quantity"), movement_type="IN",
+        reason="PURCHASE", expense_item=expense, funded_by_business=True,
+        performed_by=user,
+    )
+    return True, {"product_id": product.id}
+
+
+def handle_add_stock_from_expense(user, payload, client_id):
+    from expenses.models import ExpenseItem
+    from inventory.models import StockMovement
+    prior = StockMovement.objects.filter(client_id=client_id).first()
+    if prior:
+        return False, {"movement_id": prior.id}
+    product = _resolve(Product, payload.get("product_id"))
+    expense = _resolve(ExpenseItem, payload.get("expense_item_id"))
+    if not product or not expense:
+        raise ValidationError("Product and expense must exist before adding stock")
+    movement, created = svc_add_stock(
+        product=product, quantity=float(payload.get("quantity") or 0),
+        reason="PURCHASE", performed_by=user, expense_item_id=expense.id,
+        funded_by_business=True, client_id=client_id,
+    )
+    return created, {"movement_id": movement.id}
+
+
+def handle_refund_receipt(user, payload, client_id):
+    from POS.services import refund_receipt as svc_refund
+    receipt = _resolve(Receipt, payload.get("receipt_id") or payload.get("receiptId"))
+    if not receipt:
+        raise ValidationError("Receipt not found")
+    if receipt.status == Receipt.REFUNDED:
+        return False, {"receipt_id": receipt.id, "status": receipt.status}
+    updated = svc_refund(
+        receipt_id=receipt.id, reason=payload.get("reason") or "",
+        refunded_by=user, restock_inventory=bool(payload.get("restock_inventory", False)),
+    )
+    return True, {"receipt_id": updated.id, "status": updated.status}

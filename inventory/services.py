@@ -163,6 +163,7 @@ def add_stock_from_expense(
     quantity:        float,
     expense_item_id: int,
     performed_by,
+    client_id: str | None = None,
 ) -> StockMovement:
 
     from expenses.models import ExpenseItem
@@ -182,6 +183,10 @@ def add_stock_from_expense(
             f"Expense item with ID {expense_item_id} does not exist"
         )
 
+    if client_id:
+        existing = StockMovement.objects.filter(client_id=client_id).first()
+        if existing:
+            return existing
     return StockMovement.objects.create(
         product=product,
         quantity=quantity,
@@ -190,6 +195,7 @@ def add_stock_from_expense(
         expense_item=expense_item,
         funded_by_business=True,
         performed_by=performed_by,
+        client_id=client_id,
         notes=f"Stock added from expense #{expense_item_id}",
     )
 

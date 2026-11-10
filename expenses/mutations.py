@@ -8,6 +8,7 @@ from strawberry.exceptions import GraphQLError
 from django.core.exceptions import ValidationError
 
 from employees.decorators import permission_required
+from employees.helpers import require_permission
 
 from .types import (
     SupplierType,
@@ -113,6 +114,8 @@ class ExpenseMutation:
     ) -> CreateExpenseResult:  # 👈 changed from ExpenseItemType
 
         try:
+            if data.amount_paid and data.amount_paid > 0:
+                await sync_to_async(require_permission)(info, "expenses.pay")
             result = await sync_to_async(create_expense_item)(
                 supplier_id=data.supplier_id,
                 supplier_name=data.supplier_name,
@@ -121,6 +124,15 @@ class ExpenseMutation:
                 unit_price=data.unit_price,
                 quantity=data.quantity,
                 client_id=data.client_id,
+                inventory_action=data.inventory_action,
+                inventory_product_id=int(data.inventory_product_id) if data.inventory_product_id else None,
+                product_name=data.product_name,
+                product_unit=data.product_unit,
+                category_id=int(data.category_id) if data.category_id else None,
+                auto_deduct_on_sale=data.auto_deduct_on_sale,
+                product_client_id=data.product_client_id,
+                initial_payment=data.amount_paid,
+                performed_by=info.context.user,
             )
 
             expense = result["expense"]

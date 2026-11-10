@@ -124,6 +124,7 @@ class SettleCreditInput:
 class RefundReceiptInput:
     receipt_id: strawberry.ID
     reason:     str
+    restock_inventory: bool = False
 
 
 @strawberry.input
@@ -424,6 +425,7 @@ class POSMutation:
                 receipt_id=int(input.receipt_id),
                 reason=input.reason,
                 refunded_by=user,
+                restock_inventory=input.restock_inventory,
             )
             return await sync_to_async(_fetch_receipt)(result.id)
         except Exception as e:

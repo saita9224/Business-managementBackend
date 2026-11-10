@@ -11,6 +11,7 @@ from django.core.exceptions import ValidationError
 # ======================================================
 
 class Category(models.Model):
+    client_id  = models.UUIDField(null=True, blank=True, unique=True, db_index=True)
     name       = models.CharField(max_length=100, unique=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -26,6 +27,7 @@ class Category(models.Model):
 # ======================================================
 
 class Product(models.Model):
+    client_id = models.UUIDField(null=True, blank=True, unique=True, db_index=True)
     name     = models.CharField(max_length=200, unique=True)
     category = models.ForeignKey(
         Category,
@@ -168,6 +170,7 @@ class StockMovement(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+        Product.objects.filter(pk=self.product_id).update(updated_at=timezone.now())
 
     def __str__(self):
         return f"{self.product.name} | {self.movement_type} | {self.quantity}"
