@@ -35,7 +35,7 @@ async def load_suppliers(keys: List[int]) -> List[Supplier]:
 async def load_products(keys: List[int]) -> List[Product]:
 
     products = await sync_to_async(list)(
-        Product.objects.filter(id__in=keys)
+        Product.objects.filter(id__in=keys).select_related("category")
     )
 
     product_map: Dict[int, Product] = {
