@@ -1,6 +1,7 @@
 # sync/handlers.py
 
 from typing import Dict, Any, Tuple
+from datetime import date
 from django.core.exceptions import ValidationError
 
 from employees.models import Employee
@@ -22,6 +23,8 @@ from inventory.services import (
     add_stock as svc_add_stock,
     remove_stock as svc_remove_stock,
 )
+from hr.services import self_check_in, self_check_out, request_leave
+from hr.models import AttendanceRecord, LeaveRequest
 
 
 def _resolve(model, value):
@@ -492,3 +495,30 @@ def handle_refund_receipt(user, payload, client_id):
         refunded_by=user, restock_inventory=bool(payload.get("restock_inventory", False)),
     )
     return True, {"receipt_id": updated.id, "status": updated.status}
+
+
+def handle_self_check_in(user, payload, client_id):
+    record = self_check_in(employee=user, client_id=client_id)
+    return True, {"attendance_id": record.id, "date": record.date.isoformat()}
+
+
+def handle_self_check_out(user, payload, client_id):
+    prior = AttendanceRecord.objects.filter(checkout_client_id=client_id).first()
+    if prior:
+        return False, {"attendance_id": prior.id}
+    record = self_check_out(employee=user, client_id=client_id)
+    return True, {"attendance_id": record.id}
+
+
+def handle_request_leave(user, payload, client_id):
+    start_date = payload.get("start_date") or payload.get("startDate")
+    end_date = payload.get("end_date") or payload.get("endDate")
+    leave = request_leave(
+        employee=user,
+        leave_type=payload.get("leave_type") or payload.get("leaveType"),
+        start_date=date.fromisoformat(start_date) if isinstance(start_date, str) else start_date,
+        end_date=date.fromisoformat(end_date) if isinstance(end_date, str) else end_date,
+        reason=payload.get("reason"),
+        client_id=client_id,
+    )
+    return True, {"leave_request_id": leave.id, "status": leave.status}

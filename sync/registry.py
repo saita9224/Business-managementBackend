@@ -17,6 +17,9 @@ from .handlers import (
     handle_create_product_with_stock,
     handle_add_stock_from_expense,
     handle_refund_receipt,
+    handle_self_check_in,
+    handle_self_check_out,
+    handle_request_leave,
 )
 
 SYNC_MUTATION_REGISTRY = {
@@ -65,4 +68,7 @@ SYNC_MUTATION_REGISTRY = {
     SyncMutationTypeEnum.CREATE_PRODUCT_WITH_STOCK: {"permission": "inventory.product.create", "handler": handle_create_product_with_stock},
     SyncMutationTypeEnum.ADD_STOCK_FROM_EXPENSE: {"permission": "inventory.stock.in", "handler": handle_add_stock_from_expense},
     SyncMutationTypeEnum.REFUND_RECEIPT: {"permission": "pos.refund_order", "handler": handle_refund_receipt},
+    SyncMutationTypeEnum.SELF_CHECK_IN: {"permission": "hr.self_checkin", "handler": handle_self_check_in},
+    SyncMutationTypeEnum.SELF_CHECK_OUT: {"permission": "hr.self_checkin", "handler": handle_self_check_out},
+    SyncMutationTypeEnum.REQUEST_LEAVE: {"permission": "hr.request_leave", "handler": handle_request_leave},
 }

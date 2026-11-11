@@ -184,12 +184,18 @@ def update_contract(
 def self_check_in(
     *,
     employee,
+    client_id: str | None = None,
 ) -> AttendanceRecord:
     """
     Employee checks themselves in.
     Creates today's record or raises if already checked in.
     Status is auto-determined from contract check_in_time.
     """
+    if client_id:
+        existing = AttendanceRecord.objects.filter(checkin_client_id=client_id).first()
+        if existing:
+            return existing
+
     contract  = _get_contract(employee)
     today     = date.today()
     now_time  = timezone.localtime().time()
@@ -214,6 +220,7 @@ def self_check_in(
         status=status,
         source=AttendanceRecord.SELF,
         recorded_by=None,
+        checkin_client_id=client_id,
     )
 
 
@@ -221,11 +228,16 @@ def self_check_in(
 def self_check_out(
     *,
     employee,
+    client_id: str | None = None,
 ) -> AttendanceRecord:
     """
     Employee checks themselves out.
     Must have checked in first.
     """
+    if client_id:
+        existing = AttendanceRecord.objects.filter(checkout_client_id=client_id).first()
+        if existing:
+            return existing
     today = date.today()
 
     try:
@@ -241,7 +253,9 @@ def self_check_out(
         raise ValidationError("You have already checked out today.")
 
     record.time_out = timezone.localtime().time()
-    record.save(update_fields=["time_out", "updated_at"])
+    if client_id:
+        record.checkout_client_id = client_id
+    record.save(update_fields=["time_out", "updated_at", "checkout_client_id"])
     return record
 
 
@@ -322,7 +336,13 @@ def request_leave(
     start_date:  date,
     end_date:    date,
     reason:      str | None = None,
+    client_id:   str | None = None,
 ) -> LeaveRequest:
+
+    if client_id:
+        existing = LeaveRequest.objects.filter(client_id=client_id).first()
+        if existing:
+            return existing
 
     if leave_type not in dict(LeaveRequest.LEAVE_TYPES):
         raise ValidationError(f"Invalid leave type: {leave_type}")
@@ -350,6 +370,7 @@ def request_leave(
         end_date=end_date,
         reason=reason,
         status=LeaveRequest.PENDING,
+        client_id=client_id,
     )
 
 

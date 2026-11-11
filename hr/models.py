@@ -131,6 +131,8 @@ class AttendanceRecord(models.Model):
         on_delete=models.CASCADE,
         related_name="attendance_records",
     )
+    checkin_client_id = models.CharField(max_length=36, null=True, blank=True, unique=True)
+    checkout_client_id = models.CharField(max_length=36, null=True, blank=True, unique=True)
     date     = models.DateField()
     time_in  = models.TimeField(
         null=True, blank=True,
@@ -222,6 +224,7 @@ class LeaveRequest(models.Model):
         on_delete=models.CASCADE,
         related_name="leave_requests",
     )
+    client_id  = models.CharField(max_length=36, null=True, blank=True, unique=True)
     leave_type = models.CharField(max_length=15, choices=LEAVE_TYPES)
     start_date = models.DateField()
     end_date   = models.DateField()
