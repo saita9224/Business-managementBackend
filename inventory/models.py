@@ -37,6 +37,19 @@ class Product(models.Model):
         related_name="products",
     )
     unit = models.CharField(max_length=50, default="kg")
+    # -----------------------------------------------------------------
+    # Finance related fields
+    # -----------------------------------------------------------------
+    # Cost per unit for the product – required for accurate profit calculations.
+    # Stored as Decimal with 2 decimal places (currency). Must be > 0.
+    cost_per_unit = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        help_text="Cost of a single unit of the product. Used for COGS.",
+    )
+    # Flag used for legacy data migration – true when the cost was generated
+    # automatically from historic averages.
+    cost_generated = models.BooleanField(default=False)
 
     auto_deduct_on_sale = models.BooleanField(
         default=False,

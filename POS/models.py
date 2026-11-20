@@ -82,6 +82,7 @@ class Receipt(models.Model):
     subtotal     = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     discount     = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total        = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    cogs         = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Cost of goods sold for this receipt")
     status       = models.CharField(max_length=20, choices=STATUS_CHOICES, default=DRAFT)
     table_note   = models.CharField(max_length=100, blank=True, default="")
     submitted_at = models.DateTimeField(null=True, blank=True)

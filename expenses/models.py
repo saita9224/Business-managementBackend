@@ -46,11 +46,11 @@ class ExpenseItem(models.Model):
         related_name="expenses"
     )
 
-    product = models.ForeignKey(
+    related_product = models.ForeignKey(
         "inventory.Product",
-        on_delete=models.SET_NULL,
         null=True,
         blank=True,
+        on_delete=models.SET_NULL,
         related_name="expense_items",
     )
 
