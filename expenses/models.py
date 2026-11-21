@@ -91,7 +91,7 @@ class ExpenseItem(models.Model):
 
         indexes = [
             models.Index(fields=["supplier"]),
-            models.Index(fields=["product"]),
+            models.Index(fields=["related_product"]),
             models.Index(fields=["created_at"]),
             models.Index(fields=["payment_group_id"]),
         ]

@@ -45,6 +45,8 @@ class Product(models.Model):
     cost_per_unit = models.DecimalField(
         max_digits=12,
         decimal_places=2,
+        null=True,
+        blank=True,
         help_text="Cost of a single unit of the product. Used for COGS.",
     )
     # Flag used for legacy data migration – true when the cost was generated
