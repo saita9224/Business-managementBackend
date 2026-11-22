@@ -121,6 +121,10 @@ class ExpenseItem(models.Model):
         supplier_name = self.supplier.name if self.supplier else "No Supplier"
         return f"{self.item_name} - {supplier_name}"
 
+    @property
+    def product_id(self):
+        return self.related_product_id
+
     def clean(self):
 
         from .utils import to_decimal

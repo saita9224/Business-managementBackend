@@ -35,7 +35,7 @@ class ExpenseQuery:
     async def all_expenses(self, info) -> List[ExpenseItemType]:
         return await sync_to_async(list)(
             ExpenseItem.objects
-            .select_related("supplier", "product")
+            .select_related("supplier", "related_product")
             .order_by("-created_at")
         )
 

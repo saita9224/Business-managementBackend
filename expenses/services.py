@@ -179,7 +179,7 @@ def create_expense_item(
 
     expense = ExpenseItem(
         supplier=supplier,
-        product=product,
+        related_product=product,
         item_name=cleaned_item,
         quantity=quantity,
         unit_price=unit_price,
@@ -254,7 +254,7 @@ def list_expenses_by_supplier(supplier_id: int):
     return (
         ExpenseItem.objects
         .filter(supplier_id=supplier_id)
-        .select_related("supplier", "product")
+        .select_related("supplier", "related_product")
         .order_by("-created_at")
     )
 
@@ -263,7 +263,7 @@ def list_expenses_by_item_name(item_name: str):
     return (
         ExpenseItem.objects
         .filter(item_name__icontains=item_name)
-        .select_related("supplier", "product")
+        .select_related("supplier", "related_product")
         .order_by("-created_at")
     )
 
@@ -271,8 +271,8 @@ def list_expenses_by_item_name(item_name: str):
 def list_expenses_by_product(product_id: int):
     return (
         ExpenseItem.objects
-        .filter(product_id=product_id)
-        .select_related("supplier", "product")
+        .filter(related_product_id=product_id)
+        .select_related("supplier", "related_product")
         .order_by("-created_at")
     )
 
@@ -284,7 +284,7 @@ def list_expenses_by_product(product_id: int):
 def get_expense_details(expense_id: int) -> dict:
     expense = (
         ExpenseItem.objects
-        .select_related("supplier", "product")
+        .select_related("supplier", "related_product")
         .get(id=expense_id)
     )
 
