@@ -17,12 +17,15 @@ from .services import (
     remove_stock               as remove_stock_service,
     create_product             as create_product_service,
     create_product_with_stock  as create_product_with_stock_service,
+    create_product_packaging   as create_product_packaging_service,
+    delete_product_packaging   as delete_product_packaging_service,
     submit_reconciliation      as submit_reconciliation_service,
     approve_reconciliation     as approve_reconciliation_service,
     reject_reconciliation      as reject_reconciliation_service,
 )
 from .types import (
     ProductType,
+    ProductPackagingType,
     CategoryType,
     StockMovementType,
     StockReconciliationType,
@@ -54,6 +57,7 @@ class CreateProductWithStockInput:
     quantity:            float
     expense_item_id:     strawberry.ID
     auto_deduct_on_sale: bool = False
+    packaging:           Optional[str] = None
 
 
 @strawberry.input
@@ -61,6 +65,7 @@ class AddStockFromExpenseInput:
     product_id:      strawberry.ID
     quantity:        float
     expense_item_id: strawberry.ID
+    packaging:       Optional[str] = None
 
 
 @strawberry.input
@@ -73,6 +78,7 @@ class AddStockInput:
     expense_item_id:    Optional[strawberry.ID] = None
     group_id:           Optional[str] = None
     client_id:          Optional[str] = None
+    packaging:          Optional[str] = None
 
 
 @strawberry.input
@@ -82,6 +88,17 @@ class RemoveStockInput:
     reason:     str
     notes:      Optional[str] = None
     client_id:  Optional[str] = None
+    packaging:  Optional[str] = None
+
+
+@strawberry.input
+class CreateProductPackagingInput:
+    product_id:        strawberry.ID
+    label:             str
+    quantity_in_base:  float
+    is_purchase_unit:  bool = False
+    is_sale_unit:      bool = False
+    client_id:         Optional[str] = None
 
 
 @strawberry.input
@@ -207,6 +224,7 @@ class InventoryMutation:
                 expense_item_id=int(input.expense_item_id),
                 performed_by=employee,
                 auto_deduct_on_sale=input.auto_deduct_on_sale,
+                packaging=input.packaging,
             )
 
             # Reload with category pre-fetched
@@ -243,6 +261,7 @@ class InventoryMutation:
                 quantity=input.quantity,
                 expense_item_id=int(input.expense_item_id),
                 performed_by=employee,
+                packaging=input.packaging,
             )
         except Exception as e:
             raise GraphQLError(str(e))
@@ -278,6 +297,7 @@ class InventoryMutation:
                 notes=input.notes,
                 performed_by=employee,
                 client_id=input.client_id,
+                packaging=input.packaging,
             )
             return movement
         except Exception as e:
@@ -309,8 +329,65 @@ class InventoryMutation:
                 notes=input.notes,
                 performed_by=employee,
                 client_id=input.client_id,
+                packaging=input.packaging,
             )
             return movement
+        except Exception as e:
+            raise GraphQLError(str(e))
+
+    # --------------------------------------------------------
+    # CREATE / UPDATE PRODUCT PACKAGING (unit conversion)
+    # --------------------------------------------------------
+    @strawberry.mutation
+    @permission_required("inventory.product.create")
+    async def create_product_packaging(
+        self,
+        info:  Info,
+        input: CreateProductPackagingInput,
+    ) -> ProductPackagingType:
+
+        try:
+            product = await sync_to_async(Product.objects.get)(
+                pk=input.product_id
+            )
+        except Product.DoesNotExist:
+            raise GraphQLError("Product not found")
+
+        try:
+            packaging = await sync_to_async(create_product_packaging_service)(
+                product=product,
+                label=input.label,
+                quantity_in_base=input.quantity_in_base,
+                is_purchase_unit=input.is_purchase_unit,
+                is_sale_unit=input.is_sale_unit,
+                client_id=input.client_id,
+            )
+        except Exception as e:
+            raise GraphQLError(str(e))
+
+        return ProductPackagingType(
+            id=packaging.id,
+            label=packaging.label,
+            quantity_in_base=float(packaging.quantity_in_base),
+            is_purchase_unit=packaging.is_purchase_unit,
+            is_sale_unit=packaging.is_sale_unit,
+        )
+
+    # --------------------------------------------------------
+    # DELETE PRODUCT PACKAGING
+    # --------------------------------------------------------
+    @strawberry.mutation
+    @permission_required("inventory.product.create")
+    async def delete_product_packaging(
+        self,
+        info:          Info,
+        packaging_id:  strawberry.ID,
+    ) -> bool:
+
+        try:
+            return await sync_to_async(delete_product_packaging_service)(
+                packaging_id=int(packaging_id)
+            )
         except Exception as e:
             raise GraphQLError(str(e))
 

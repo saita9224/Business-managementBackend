@@ -137,6 +137,7 @@ class ExpenseMutation:
                     product_client_id=data.product_client_id,
                     initial_payment=data.amount_paid,
                     performed_by=info.context.user,
+                    packaging=data.packaging,
                 )
 
             result = await sync_to_async(run_create_expense)()

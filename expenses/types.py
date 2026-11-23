@@ -175,6 +175,7 @@ class ExpenseInput:
     auto_deduct_on_sale: bool = False
     amount_paid: Optional[Decimal] = None
     product_client_id: Optional[str] = None
+    packaging: Optional[str] = None
 
 
 @strawberry.input

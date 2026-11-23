@@ -112,6 +112,7 @@ def create_expense_item(
     product_client_id: str | None = None,
     initial_payment: Decimal | float | str | None = None,
     performed_by=None,
+    packaging: str | None = None,
 ) -> dict:
     """
     Create an expense item.
@@ -195,9 +196,10 @@ def create_expense_item(
     # 👇 Check if item_name matches an existing inventory product
     matched_product = match_product_by_name(cleaned_item)
     if action in {"ADD_EXISTING", "CREATE_PRODUCT"}:
+        from inventory.services import to_base_units
         StockMovement.objects.create(
             product=product,
-            quantity=quantity,
+            quantity=to_base_units(product, quantity, packaging),
             movement_type=StockMovement.IN,
             reason=StockMovement.PURCHASE,
             expense_item=expense,

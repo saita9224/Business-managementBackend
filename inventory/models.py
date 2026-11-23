@@ -92,6 +92,58 @@ class Product(models.Model):
 
 
 # ======================================================
+# PRODUCT PACKAGING (unit-of-measure conversions)
+# ======================================================
+#
+# Product.unit is the canonical BASE unit — every StockMovement
+# quantity is stored in base units. A ProductPackaging row says
+# "1 <label> = quantity_in_base <base units>", e.g. for flour with
+# base unit "kg":  bale -> 24,  packet 2kg -> 2.
+# Purchase/sale entry points accept a packaging label and convert
+# to base units before touching stock.
+
+class ProductPackaging(models.Model):
+    client_id = models.UUIDField(
+        null=True, blank=True, unique=True, db_index=True
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="packagings",
+    )
+    label = models.CharField(
+        max_length=100,
+        help_text="Display name, e.g. 'bale', 'packet 2kg'. Matched case-insensitively.",
+    )
+    quantity_in_base = models.DecimalField(
+        max_digits=12,
+        decimal_places=3,
+        help_text="How many base units (Product.unit) one of this packaging contains.",
+    )
+    is_purchase_unit = models.BooleanField(
+        default=False,
+        help_text="Shown as an option when recording purchases/stock IN.",
+    )
+    is_sale_unit = models.BooleanField(
+        default=False,
+        help_text="Shown as an option when recording sales/stock OUT.",
+    )
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["label"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "label"],
+                name="unique_product_packaging_label",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.product.name} | {self.label} = {self.quantity_in_base} {self.product.unit}"
+
+
+# ======================================================
 # STOCK MOVEMENT
 # ======================================================
 

@@ -96,6 +96,19 @@ class StockMovementType:
 
 
 # ============================================================
+# PRODUCT PACKAGING TYPE
+# ============================================================
+
+@strawberry.type
+class ProductPackagingType:
+    id:               strawberry.ID
+    label:            str
+    quantity_in_base: float
+    is_purchase_unit: bool
+    is_sale_unit:     bool
+
+
+# ============================================================
 # PRODUCT TYPE
 # ============================================================
 
@@ -123,6 +136,23 @@ class ProductType:
         return await info.context.movements_by_product_loader.load(
             int(self.id)
         )
+
+    @strawberry.field
+    async def packagings(self, info: Info) -> List[ProductPackagingType]:
+        require_auth(info)
+        packagings = await info.context.packagings_by_product_loader.load(
+            int(self.id)
+        )
+        return [
+            ProductPackagingType(
+                id=p.id,
+                label=p.label,
+                quantity_in_base=float(p.quantity_in_base),
+                is_purchase_unit=p.is_purchase_unit,
+                is_sale_unit=p.is_sale_unit,
+            )
+            for p in packagings
+        ]
 
 
 # ============================================================

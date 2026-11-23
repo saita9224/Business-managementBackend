@@ -284,6 +284,7 @@ def handle_create_expense(
         product_client_id=payload.get("product_client_id"),
         initial_payment=payload.get("amount_paid"),
         performed_by=user,
+        packaging=payload.get("packaging"),
     )
 
     expense = result["expense"]
@@ -343,6 +344,7 @@ def handle_add_stock(
         group_id=payload.get("group_id"),
         notes=payload.get("notes"),
         client_id=client_id,
+        packaging=payload.get("packaging"),
     )
 
     return created, {
@@ -376,6 +378,7 @@ def handle_remove_stock(
         group_id=payload.get("group_id"),
         notes=payload.get("notes"),
         client_id=client_id,
+        packaging=payload.get("packaging"),
     )
 
     return created, {
@@ -457,8 +460,11 @@ def handle_create_product_with_stock(user, payload, client_id):
     if product.movements.filter(expense_item=expense, reason="PURCHASE").exists():
         return False, {"product_id": product.id}
     from inventory.models import StockMovement
+    from inventory.services import to_base_units
     StockMovement.objects.create(
-        product=product, quantity=payload.get("quantity"), movement_type="IN",
+        product=product,
+        quantity=to_base_units(product, payload.get("quantity"), payload.get("packaging")),
+        movement_type="IN",
         reason="PURCHASE", expense_item=expense, funded_by_business=True,
         performed_by=user,
     )
@@ -479,6 +485,7 @@ def handle_add_stock_from_expense(user, payload, client_id):
         product=product, quantity=float(payload.get("quantity") or 0),
         reason="PURCHASE", performed_by=user, expense_item_id=expense.id,
         funded_by_business=True, client_id=client_id,
+        packaging=payload.get("packaging"),
     )
     return created, {"movement_id": movement.id}
 

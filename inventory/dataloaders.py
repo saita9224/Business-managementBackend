@@ -13,7 +13,7 @@ from django.db.models import (
 )
 from strawberry.dataloader import DataLoader
 
-from .models import Product, StockMovement, StockReconciliation
+from .models import Product, ProductPackaging, StockMovement, StockReconciliation
 
 
 # ────────────────────────────────────────────────
@@ -111,6 +111,25 @@ async def load_latest_reconciliation(
 
 
 # ────────────────────────────────────────────────
+# Load packagings by product (unit conversions)
+# ────────────────────────────────────────────────
+async def load_packagings_by_product(
+    keys: List[int],
+) -> List[List[ProductPackaging]]:
+    packagings = await sync_to_async(list)(
+        ProductPackaging.objects
+        .filter(product_id__in=keys)
+        .order_by("label")
+    )
+
+    grouped: Dict[int, List[ProductPackaging]] = defaultdict(list)
+    for packaging in packagings:
+        grouped[packaging.product_id].append(packaging)
+
+    return [grouped.get(product_id, []) for product_id in keys]
+
+
+# ────────────────────────────────────────────────
 # Loader factory (request-scoped)
 # ────────────────────────────────────────────────
 def create_inventory_dataloaders():
@@ -128,5 +147,8 @@ def create_inventory_dataloaders():
         ),
         "latest_reconciliation_loader": DataLoader(
             load_fn=load_latest_reconciliation
+        ),
+        "packagings_by_product_loader": DataLoader(
+            load_fn=load_packagings_by_product
         ),
     }

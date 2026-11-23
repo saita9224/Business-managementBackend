@@ -1,14 +1,118 @@
 # inventory/services.py
 
+from decimal import Decimal
+
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from .models import (
     Product,
+    ProductPackaging,
     StockMovement,
     StockReconciliation,
 )
+
+
+# ======================================================
+# UNIT / PACKAGING CONVERSION
+# ======================================================
+#
+# Product.unit is the canonical BASE unit. Every StockMovement
+# quantity is stored in base units. Callers that collect a
+# quantity in a packaging (e.g. "2 bales") pass the packaging
+# label; to_base_units() converts to base units before the
+# movement is created.
+
+def resolve_packaging(
+    product: Product,
+    packaging_label: str | None,
+) -> ProductPackaging | None:
+    """
+    Returns the ProductPackaging matching the label for this
+    product, or None when the label is empty or equals the
+    product's base unit (factor 1).
+    """
+    label = (packaging_label or "").strip()
+    if not label:
+        return None
+
+    base_unit = (product.unit or "").strip()
+    if base_unit and label.lower() == base_unit.lower():
+        return None
+
+    try:
+        return product.packagings.get(label__iexact=label)
+    except ProductPackaging.DoesNotExist:
+        raise ValidationError(
+            f"Packaging '{label}' not found for product '{product.name}'"
+        )
+
+
+def to_base_units(
+    product: Product,
+    quantity,
+    packaging_label: str | None = None,
+) -> Decimal:
+    """
+    Convert a quantity expressed in a packaging into base units
+    (Product.unit). Returns a Decimal quantized to 3 places.
+    """
+    qty = Decimal(str(quantity))
+    packaging = resolve_packaging(product, packaging_label)
+    if packaging is None:
+        return qty.quantize(Decimal("0.001"))
+    return (qty * packaging.quantity_in_base).quantize(Decimal("0.001"))
+
+
+# ======================================================
+# PACKAGING MANAGEMENT
+# ======================================================
+
+def create_product_packaging(
+    *,
+    product: Product,
+    label: str,
+    quantity_in_base,
+    is_purchase_unit: bool = False,
+    is_sale_unit: bool = False,
+    client_id: str | None = None,
+) -> ProductPackaging:
+    label = (label or "").strip()
+    if not label:
+        raise ValidationError("Packaging label is required")
+
+    factor = Decimal(str(quantity_in_base))
+    if factor <= 0:
+        raise ValidationError("quantity_in_base must be greater than zero")
+
+    base_unit = (product.unit or "").strip()
+    if base_unit and label.lower() == base_unit.lower():
+        raise ValidationError(
+            f"'{label}' is the product's base unit; no packaging needed"
+        )
+
+    packaging, _ = ProductPackaging.objects.update_or_create(
+        product=product,
+        label__iexact=label,
+        defaults={
+            "label": label,
+            "quantity_in_base": factor,
+            "is_purchase_unit": is_purchase_unit,
+            "is_sale_unit": is_sale_unit,
+            "client_id": client_id,
+        },
+    )
+    return packaging
+
+
+def delete_product_packaging(*, packaging_id: int) -> bool:
+    try:
+        packaging = ProductPackaging.objects.get(pk=packaging_id)
+    except ProductPackaging.DoesNotExist:
+        raise ValidationError("Packaging not found")
+    packaging.delete()
+    return True
 
 
 # ======================================================
@@ -47,6 +151,7 @@ def add_stock(
     group_id:           str | None = None,
     notes:              str | None = None,
     client_id:          str | None = None,
+    packaging:          str | None = None,
 ) -> tuple[StockMovement, bool]:
 
     if client_id:
@@ -84,9 +189,11 @@ def add_stock(
                 f"Expense item with ID {expense_item_id} does not exist"
             )
 
+    base_quantity = to_base_units(product, quantity, packaging)
+
     movement = StockMovement.objects.create(
         product=product,
-        quantity=quantity,
+        quantity=base_quantity,
         movement_type=StockMovement.IN,
         reason=reason,
         expense_item=expense_item,
@@ -113,6 +220,7 @@ def remove_stock(
     group_id:     str | None = None,
     notes:        str | None = None,
     client_id:    str | None = None,
+    packaging:    str | None = None,
 ) -> tuple[StockMovement, bool]:
 
     if client_id:
@@ -133,15 +241,17 @@ def remove_stock(
     }:
         raise ValidationError(f"Reason '{reason}' is not valid for stock OUT")
 
+    base_quantity = to_base_units(product, quantity, packaging)
+
     available_stock = product.current_stock
-    if available_stock < quantity:
+    if available_stock < base_quantity:
         raise ValidationError(
             f"Insufficient stock. Available: {available_stock}"
         )
 
     movement = StockMovement.objects.create(
         product=product,
-        quantity=quantity,
+        quantity=base_quantity,
         movement_type=StockMovement.OUT,
         reason=reason,
         performed_by=performed_by,
@@ -164,6 +274,7 @@ def add_stock_from_expense(
     expense_item_id: int,
     performed_by,
     client_id: str | None = None,
+    packaging: str | None = None,
 ) -> StockMovement:
 
     from expenses.models import ExpenseItem
@@ -189,7 +300,7 @@ def add_stock_from_expense(
             return existing
     return StockMovement.objects.create(
         product=product,
-        quantity=quantity,
+        quantity=to_base_units(product, quantity, packaging),
         movement_type=StockMovement.IN,
         reason=StockMovement.PURCHASE,
         expense_item=expense_item,
@@ -243,6 +354,7 @@ def create_product_with_stock(
     expense_item_id:     int,
     performed_by,
     auto_deduct_on_sale: bool = False,
+    packaging:           str | None = None,
 ) -> dict:
 
     from expenses.models import ExpenseItem
@@ -273,7 +385,7 @@ def create_product_with_stock(
 
     movement = StockMovement.objects.create(
         product=product,
-        quantity=quantity,
+        quantity=to_base_units(product, quantity, packaging),
         movement_type=StockMovement.IN,
         reason=StockMovement.PURCHASE,
         expense_item=expense_item,
