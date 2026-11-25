@@ -228,7 +228,7 @@ class POSStockMovement(models.Model):
         on_delete=models.PROTECT,
         related_name="pos_movements"
     )
-    quantity                = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity                = models.DecimalField(max_digits=12, decimal_places=3)
     deducted_from_inventory = models.BooleanField(default=False)
     notes                   = models.TextField(blank=True, null=True)
     performed_by            = models.ForeignKey(
@@ -236,6 +236,18 @@ class POSStockMovement(models.Model):
         on_delete=models.SET_NULL,
         null=True, blank=True,
         related_name="pos_stock_movements"
+    )
+    menu_item = models.ForeignKey(
+        "MenuItem",
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="stock_movements",
+    )
+    order_item = models.ForeignKey(
+        "OrderItem",
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="stock_movements",
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -305,3 +317,38 @@ class MenuItem(models.Model):
 
     def __str__(self):
         return f"{self.emoji} {self.name}"
+
+
+class MenuItemIngredient(models.Model):
+    """
+    Bill-of-materials row: one unit of the parent MenuItem consumes
+    `quantity` units (in the ingredient product's BASE unit) of `product`.
+    Quantities are per single sale of the menu item - multiply by the
+    order quantity at deduction time.
+    """
+
+    menu_item = models.ForeignKey(
+        MenuItem,
+        on_delete=models.CASCADE,
+        related_name="ingredients",
+    )
+    product = models.ForeignKey(
+        "inventory.Product",
+        on_delete=models.PROTECT,
+        related_name="used_in_recipes",
+    )
+    quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    client_id = models.UUIDField(null=True, blank=True, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["product__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["menu_item", "product"],
+                name="unique_menu_item_ingredient_product",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.menu_item.name} -> {self.product.name} x {self.quantity}"

@@ -15,6 +15,7 @@ from .types import (
     POSSessionType,
     ReceiptType,
     MenuItemType,
+    MenuItemIngredientType,
     CreditAccountType,
     UnpricedProductType,
     MenuCategoryType,
@@ -255,6 +256,30 @@ class POSQuery:
                 .order_by("-is_pinned", "name")
             )
         return await sync_to_async(fetch)()
+
+    @strawberry.field
+    @permission_required("pos.manage_menu")
+    async def menu_item_recipe(
+        self, info: Info, item_id: strawberry.ID
+    ) -> List[MenuItemIngredientType]:
+        """Returns the bill-of-materials rows for a menu item."""
+        def fetch():
+            return list(
+                MenuItem.objects
+                .get(pk=int(item_id))
+                .ingredients.select_related("product")
+            )
+        rows = await sync_to_async(fetch)()
+        return [
+            MenuItemIngredientType(
+                id=ing.id,
+                product_id=ing.product_id,
+                product_name=ing.product.name,
+                unit=ing.product.unit or "",
+                quantity=ing.quantity,
+            )
+            for ing in rows
+        ]
 
     # ── MENU CATEGORIES ───────────────────────────────────
 

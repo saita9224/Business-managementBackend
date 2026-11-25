@@ -19,6 +19,7 @@ from .models import (
     CreditAccount,
     POSStockMovement,
     MenuItem,
+    MenuItemIngredient,
 )
 
 
@@ -42,6 +43,15 @@ class MenuCategoryType:
 
 
 @strawberry.type
+class MenuItemIngredientType:
+    id:          strawberry.ID
+    product_id:  strawberry.ID
+    product_name: str
+    unit:        str
+    quantity:    Decimal
+
+
+@strawberry.type
 class MenuItemType:
     id:           strawberry.ID
     name:         str
@@ -55,6 +65,37 @@ class MenuItemType:
     @strawberry.field
     def has_inventory(self) -> bool:
         return self.product_id is not None
+
+    @strawberry.field
+    async def is_recipe(self, info: Info) -> bool:
+        ingredients = await info.context.ingredients_by_menu_item.load(int(self.id))
+        return len(ingredients) > 0
+
+    @strawberry.field
+    async def ingredients(self, info: Info) -> List[MenuItemIngredientType]:
+        rows = await info.context.ingredients_by_menu_item.load(int(self.id))
+        return [
+            MenuItemIngredientType(
+                id=ing.id,
+                product_id=ing.product_id,
+                product_name=ing.product.name,
+                unit=ing.product.unit or "",
+                quantity=ing.quantity,
+            )
+            for ing in rows
+        ]
+
+    @strawberry.field
+    async def recipe_cost(self, info: Info) -> Optional[Decimal]:
+        rows = await info.context.ingredients_by_menu_item.load(int(self.id))
+        if not rows:
+            return None
+        total = Decimal("0")
+        for ing in rows:
+            cost = ing.product.cost_per_unit
+            if cost is not None:
+                total += ing.quantity * cost
+        return total
 
 
 @strawberry.type
@@ -194,3 +235,17 @@ class POSStockMovementType:
     deducted_from_inventory: bool
     notes: Optional[str]
     created_at: datetime
+    menu_item_id: Optional[strawberry.ID]
+    order_item_id: Optional[strawberry.ID]
+
+    @strawberry.field
+    async def menu_item(self, info: Info) -> Optional[MenuItemType]:
+        if not self.menu_item_id:
+            return None
+        return await sync_to_async(lambda: self.menu_item)()
+
+    @strawberry.field
+    async def order_item(self, info: Info) -> Optional[OrderItemType]:
+        if not self.order_item_id:
+            return None
+        return await sync_to_async(lambda: self.order_item)()

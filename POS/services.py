@@ -24,6 +24,7 @@ from .models import (
     POSStockMovement,
     MenuCategory,
     MenuItem,
+    MenuItemIngredient,
 )
 
 TWO = Decimal("0.01")
@@ -368,6 +369,52 @@ def submit_order(
                 TWO, rounding=ROUND_HALF_UP
             )
 
+            menu_item = getattr(item, "menu_item", None)
+            ingredients = []
+            if menu_item is not None:
+                ingredients = list(
+                    menu_item.ingredients.select_related("product")
+                )
+
+            if ingredients:
+                # Recipe item: deduct each ingredient's base-unit quantity.
+                for ingredient in ingredients:
+                    deducted = False
+                    if emit_stock:
+                        try:
+                            with transaction.atomic():
+                                remove_stock(
+                                    product=ingredient.product,
+                                    quantity=float(
+                                        ingredient.quantity * item.quantity
+                                    ),
+                                    reason=StockMovement.SALE,
+                                    performed_by=performed_by,
+                                    group_id=str(receipt.id),
+                                    notes=(
+                                        f"Recipe deduction for "
+                                        f"{menu_item.name}"
+                                    ),
+                                )
+                                deducted = True
+                        except ValidationError as exc:
+                            raise ValidationError(str(exc))
+                        except Exception as exc:
+                            raise ValidationError(
+                                f"Unexpected inventory error: {str(exc)}"
+                            )
+                    POSStockMovement.objects.create(
+                        receipt=receipt,
+                        product=ingredient.product,
+                        quantity=ingredient.quantity * item.quantity,
+                        deducted_from_inventory=deducted,
+                        notes=f"Recipe: {menu_item.name}",
+                        performed_by=performed_by,
+                        menu_item=menu_item,
+                        order_item=item,
+                    )
+                continue
+
             if item.product_id == 0:
                 continue
 
@@ -406,6 +453,8 @@ def submit_order(
                     deducted_from_inventory=inventory_deducted,
                     notes=inventory_error or "",
                     performed_by=performed_by,
+                    menu_item=menu_item,
+                    order_item=item,
                 )
 
     subtotal = subtotal.quantize(TWO, rounding=ROUND_HALF_UP)
@@ -745,3 +794,72 @@ def get_menu_with_frequency(limit: int = 8) -> list:
         .order_by("-is_pinned", "-order_count", "name")
     )
     return list(items)
+
+
+# =============================== RECIPES ===============================
+
+def set_menu_item_ingredients(
+    *,
+    menu_item: MenuItem,
+    ingredients: list,
+) -> list:
+    """
+    Replace the recipe for a menu item.
+    `ingredients` is a list of dicts: {"product_id": int, "quantity": float}.
+    Quantities are in each product's BASE unit, per single menu item sale.
+    """
+    if not ingredients:
+        menu_item.ingredients.all().delete()
+        return []
+
+    product_ids = [int(i["product_id"]) for i in ingredients]
+    products = {
+        p.id: p
+        for p in Product.objects.filter(pk__in=product_ids)
+    }
+    missing = set(product_ids) - set(products.keys())
+    if missing:
+        raise ValidationError(
+            f"Products not found: {sorted(missing)}"
+        )
+
+    seen = set()
+    rows = []
+    for entry in ingredients:
+        pid = int(entry["product_id"])
+        if pid in seen:
+            raise ValidationError(
+                f"Duplicate ingredient product {pid}"
+            )
+        seen.add(pid)
+        qty = Decimal(str(entry["quantity"]))
+        if qty <= 0:
+            raise ValidationError(
+                f"Ingredient quantity must be greater than zero "
+                f"for product {pid}"
+            )
+        rows.append(
+            MenuItemIngredient(
+                menu_item=menu_item,
+                product=products[pid],
+                quantity=qty,
+            )
+        )
+
+    with transaction.atomic():
+        menu_item.ingredients.all().delete()
+        MenuItemIngredient.objects.bulk_create(rows)
+
+    return list(
+        menu_item.ingredients.select_related("product").all()
+    )
+
+
+def menu_item_recipe_cost(menu_item: MenuItem) -> Decimal:
+    """Total ingredient cost for ONE sale of the menu item."""
+    total = Decimal("0")
+    for ing in menu_item.ingredients.select_related("product"):
+        cost = ing.product.cost_per_unit
+        if cost is not None:
+            total += ing.quantity * cost
+    return total.quantize(TWO, rounding=ROUND_HALF_UP)

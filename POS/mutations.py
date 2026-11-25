@@ -1,6 +1,6 @@
 # POS Mutations
 
-from typing import Optional
+from typing import List, Optional
 from datetime import date
 
 import strawberry
@@ -30,6 +30,7 @@ from .services import (
     create_menu_item        as svc_create_menu_item,
     update_menu_item        as svc_update_menu_item,
     delete_menu_item        as svc_delete_menu_item,
+    set_menu_item_ingredients as svc_set_menu_item_ingredients,
 )
 from .types import (
     POSSessionType,
@@ -40,6 +41,7 @@ from .types import (
     CreditAccountType,
     MenuCategoryType,
     MenuItemType,
+    MenuItemIngredientType,
 )
 
 
@@ -151,6 +153,18 @@ class UpdateMenuItemInput:
     category:     Optional[str]   = None
     is_pinned:    Optional[bool]  = None
     is_available: Optional[bool]  = None
+
+
+@strawberry.input
+class RecipeIngredientInput:
+    product_id: strawberry.ID
+    quantity:   float
+
+
+@strawberry.input
+class SetMenuItemIngredientsInput:
+    item_id:      strawberry.ID
+    ingredients:  list[RecipeIngredientInput]
 
 
 # ======================================================
@@ -490,5 +504,36 @@ class POSMutation:
     ) -> bool:
         try:
             return await sync_to_async(svc_delete_menu_item)(item_id=int(item_id))
+        except Exception as e:
+            raise GraphQLError(str(e))
+
+    @strawberry.mutation
+    @permission_required("pos.manage_menu")
+    async def set_menu_item_ingredients(
+        self, info: Info, input: SetMenuItemIngredientsInput
+    ) -> List[MenuItemIngredientType]:
+        try:
+            menu_item = await sync_to_async(MenuItem.objects.get)(
+                pk=int(input.item_id)
+            )
+            rows = await sync_to_async(svc_set_menu_item_ingredients)(
+                menu_item=menu_item,
+                ingredients=[
+                    {"product_id": int(i.product_id), "quantity": i.quantity}
+                    for i in input.ingredients
+                ],
+            )
+            return [
+                MenuItemIngredientType(
+                    id=ing.id,
+                    product_id=ing.product_id,
+                    product_name=ing.product.name,
+                    unit=ing.product.unit or "",
+                    quantity=ing.quantity,
+                )
+                for ing in rows
+            ]
+        except MenuItem.DoesNotExist:
+            raise GraphQLError("Menu item not found.")
         except Exception as e:
             raise GraphQLError(str(e))

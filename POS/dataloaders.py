@@ -10,6 +10,7 @@ from .models import (
     Payment,
     CreditAccount,
     POSStockMovement,
+    MenuItemIngredient,
 )
 
 
@@ -128,15 +129,35 @@ async def load_stock_by_receipt(keys: list[int]):
 
 
 # ======================================================
+# RECIPE INGREDIENTS BY MENU ITEM
+# ======================================================
+
+async def load_ingredients_by_menu_item(keys: list[int]):
+    ingredients = await sync_to_async(list)(
+        MenuItemIngredient.objects
+        .filter(menu_item_id__in=keys)
+        .select_related("product")
+        .order_by("product__name")
+    )
+
+    grouped = {}
+    for ing in ingredients:
+        grouped.setdefault(ing.menu_item_id, []).append(ing)
+
+    return [grouped.get(k, []) for k in keys]
+
+
+# ======================================================
 # LOADER FACTORY (REQUEST SCOPED)
 # ======================================================
 
 def create_pos_dataloaders():
     return {
-        "receipts_by_session": DataLoader(load_receipts_by_session),
-        "orders_by_receipt":   DataLoader(load_orders_by_receipt),
-        "items_by_order":      DataLoader(load_items_by_order),
-        "payments_by_receipt": DataLoader(load_payments_by_receipt),
-        "credit_by_receipt":   DataLoader(load_credit_by_receipt),
-        "stock_by_receipt":    DataLoader(load_stock_by_receipt),
+        "receipts_by_session":      DataLoader(load_receipts_by_session),
+        "orders_by_receipt":        DataLoader(load_orders_by_receipt),
+        "items_by_order":           DataLoader(load_items_by_order),
+        "payments_by_receipt":      DataLoader(load_payments_by_receipt),
+        "credit_by_receipt":        DataLoader(load_credit_by_receipt),
+        "stock_by_receipt":         DataLoader(load_stock_by_receipt),
+        "ingredients_by_menu_item": DataLoader(load_ingredients_by_menu_item),
     }
