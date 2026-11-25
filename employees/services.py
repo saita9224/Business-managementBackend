@@ -7,6 +7,9 @@ from django.conf import settings
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.contrib.auth.hashers import check_password, make_password
+from django.contrib.auth.password_validation import validate_password
+from django.utils import timezone
+from datetime import timedelta
 
 from .models import (
     Employee,
@@ -148,6 +151,11 @@ def create_employee(
             f"An employee with email '{email}' already exists"
         )
 
+    try:
+        validate_password(password)
+    except ValidationError as exc:
+        raise ValidationError("; ".join(exc.messages))
+
     roles: list[Role] = []
     for role_name in role_names:
         role_name = role_name.strip()
@@ -193,6 +201,10 @@ def update_employee(
     if phone is not None: employee.phone = phone
 
     if password:
+        try:
+            validate_password(password)
+        except ValidationError as exc:
+            raise ValidationError("; ".join(exc.messages))
         employee.set_password(password)
 
     employee.save()
@@ -252,6 +264,11 @@ def onboard_employee(
             "At least one permission must be selected."
         )
 
+    try:
+        validate_password(password)
+    except ValidationError as exc:
+        raise ValidationError("; ".join(exc.messages))
+
     # 1. Create employee — unverified until they confirm PIN
     employee = Employee(
         name=name,
@@ -306,9 +323,15 @@ def create_employee_verification_pin(employee: Employee) -> str:
 
     pin = generate_pin()
 
-    # Replace any existing verification record (covers resend case)
-    EmailVerification.objects.filter(employee=employee).delete()
-    EmailVerification.objects.create(employee=employee, pin=make_password(pin))
+    # Preserve the attempts counter across resends — otherwise an
+    # attacker could reset their guess budget by requesting a new PIN.
+    existing = EmailVerification.objects.filter(employee=employee).first()
+    if existing:
+        existing.pin = make_password(pin)
+        existing.expires_at = timezone.now() + timedelta(minutes=30)
+        existing.save(update_fields=["pin", "expires_at"])
+    else:
+        EmailVerification.objects.create(employee=employee, pin=make_password(pin))
 
     logger.info("Created email verification PIN for %s", employee.email)
     return pin
@@ -342,11 +365,8 @@ def verify_employee_email_pin(employee: Employee, pin: str) -> None:
             "Too many incorrect attempts. Please request a new PIN."
         )
 
-    pin_matches = (
-        verification.pin == pin
-        if len(verification.pin) == 6 and verification.pin.isdigit()
-        else check_password(pin, verification.pin)
-    )
+    # PINs are always stored hashed — never compare plaintext.
+    pin_matches = check_password(pin, verification.pin)
 
     if not pin_matches:
         verification.attempts += 1

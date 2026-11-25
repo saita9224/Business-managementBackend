@@ -24,7 +24,7 @@ class SyncQuery:
         if not user or not user.is_authenticated:
             raise GraphQLError("Authentication required")
 
-        result = await sync_to_async(extract_pull_changes)(lastPulledAt)
+        result = await sync_to_async(extract_pull_changes)(lastPulledAt, user)
         return PullSyncResponse(
             changes=result["changes"],
             timestamp=result["timestamp"],

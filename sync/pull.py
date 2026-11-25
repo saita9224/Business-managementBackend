@@ -62,7 +62,7 @@ def serialize_menu_item(mi: MenuItem) -> Dict[str, Any]:
         "name": mi.name,
         "category": mi.category,
         "emoji": mi.emoji,
-        "price": float(mi.price),
+        "price": str(mi.price),
         "product_id": str(mi.product_id) if mi.product_id else None,
         "is_available": mi.is_available,
         "is_pinned": mi.is_pinned,
@@ -78,9 +78,9 @@ def serialize_receipt(r: Receipt) -> Dict[str, Any]:
         "receipt_number": r.receipt_number,
         "session_id": str(r.session_id),
         "status": r.status,
-        "subtotal": float(r.subtotal),
-        "total": float(r.total),
-        "discount": float(r.discount),
+        "subtotal": str(r.subtotal),
+        "total": str(r.total),
+        "discount": str(r.discount),
         "table_note": r.table_note,
         "created_at": _to_epoch_ms(r.created_at),
         "updated_at": _to_epoch_ms(r.updated_at),
@@ -106,9 +106,9 @@ def serialize_order_item(oi: OrderItem) -> Dict[str, Any]:
         "product_id": str(oi.product_id),
         "product_name": oi.product_name,
         "quantity": float(oi.quantity),
-        "listed_price": float(oi.listed_price),
-        "final_price": float(oi.final_price),
-        "line_total": float(oi.line_total),
+        "listed_price": str(oi.listed_price),
+        "final_price": str(oi.final_price),
+        "line_total": str(oi.line_total),
         "created_at": _to_epoch_ms(oi.created_at),
     }
 
@@ -118,7 +118,7 @@ def serialize_payment(p: Payment) -> Dict[str, Any]:
         "id": str(p.id),
         "client_id": str(p.client_id) if p.client_id else None,
         "receipt_id": str(p.receipt_id),
-        "amount": float(p.amount),
+        "amount": str(p.amount),
         "method": p.method,
         "created_at": _to_epoch_ms(p.created_at),
     }
@@ -134,10 +134,10 @@ def serialize_expense(e: ExpenseItem) -> Dict[str, Any]:
         "product_id": str(e.product_id) if e.product_id else None,
         "item_name": e.item_name,
         "quantity": float(e.quantity),
-        "unit_price": float(e.unit_price),
-        "total_price": float(e.total_price),
-        "amount_paid": float(paid),
-        "balance": float(e.total_price - paid),
+        "unit_price": str(e.unit_price),
+        "total_price": str(e.total_price),
+        "amount_paid": str(paid),
+        "balance": str(e.total_price - paid),
         "is_fully_paid": paid >= e.total_price,
         "supplier_name": e.supplier.name if e.supplier else "",
         "created_at": _to_epoch_ms(e.created_at),
@@ -183,20 +183,58 @@ def get_table_changes(model_cls, serializer, since_dt: Optional[datetime], has_u
         }
 
 
-def extract_pull_changes(last_pulled_at: Optional[float]) -> Dict[str, Any]:
+# Tables exposed via pullChanges and the permission required to
+# receive each one's changes. Users without a table's permission get
+# an empty change set for it (not an error), so partially-privileged
+# staff can still sync the data they need.
+TABLE_PERMISSIONS = {
+    "products":          "inventory.product.view",
+    "categories":        "inventory.product.view",
+    "menu_categories":   "pos.create_order",
+    "menu_items":        "pos.create_order",
+    "receipts":          "pos.view_orders",
+    "orders":            "pos.view_orders",
+    "order_items":       "pos.view_orders",
+    "payments":          "pos.view_payments",
+    "expenses":          "expenses.view",
+    "stock_movements":   "inventory.stock.view",
+}
+
+_EMPTY_CHANGES = {"created": [], "updated": [], "deleted": []}
+
+
+def _user_permission_codes(user) -> set:
+    """Return the set of permission codes for the user, or {'*'} for Admin."""
+    if user is None:
+        return set()
+    if user.roles.filter(name__iexact="Admin").exists():
+        return {"*"}
+    from employees.models import RolePermission
+    return set(
+        RolePermission.objects
+        .filter(role__in=user.roles.all())
+        .values_list("permission__code", flat=True)
+    )
+
+
+def extract_pull_changes(last_pulled_at: Optional[float], user=None) -> Dict[str, Any]:
     since_dt = _parse_timestamp(last_pulled_at)
+    perms = _user_permission_codes(user)
+
+    def allowed(table: str) -> bool:
+        return "*" in perms or TABLE_PERMISSIONS[table] in perms
 
     changes = {
-        "products": get_table_changes(Product, serialize_product, since_dt, has_updated_at=True),
-        "categories": get_table_changes(Category, serialize_category, since_dt, has_updated_at=True),
-        "menu_categories": get_table_changes(MenuCategory, serialize_menu_category, since_dt, has_updated_at=True),
-        "menu_items": get_table_changes(MenuItem, serialize_menu_item, since_dt, has_updated_at=True),
-        "receipts": get_table_changes(Receipt, serialize_receipt, since_dt, has_updated_at=True),
-        "orders": get_table_changes(Order, serialize_order, since_dt, has_updated_at=False),
-        "order_items": get_table_changes(OrderItem, serialize_order_item, since_dt, has_updated_at=False),
-        "payments": get_table_changes(Payment, serialize_payment, since_dt, has_updated_at=False),
-        "expenses": get_table_changes(ExpenseItem, serialize_expense, since_dt, has_updated_at=False),
-        "stock_movements": get_table_changes(StockMovement, serialize_stock_movement, since_dt, has_updated_at=False),
+        "products": get_table_changes(Product, serialize_product, since_dt, has_updated_at=True) if allowed("products") else dict(_EMPTY_CHANGES),
+        "categories": get_table_changes(Category, serialize_category, since_dt, has_updated_at=True) if allowed("categories") else dict(_EMPTY_CHANGES),
+        "menu_categories": get_table_changes(MenuCategory, serialize_menu_category, since_dt, has_updated_at=True) if allowed("menu_categories") else dict(_EMPTY_CHANGES),
+        "menu_items": get_table_changes(MenuItem, serialize_menu_item, since_dt, has_updated_at=True) if allowed("menu_items") else dict(_EMPTY_CHANGES),
+        "receipts": get_table_changes(Receipt, serialize_receipt, since_dt, has_updated_at=True) if allowed("receipts") else dict(_EMPTY_CHANGES),
+        "orders": get_table_changes(Order, serialize_order, since_dt, has_updated_at=False) if allowed("orders") else dict(_EMPTY_CHANGES),
+        "order_items": get_table_changes(OrderItem, serialize_order_item, since_dt, has_updated_at=False) if allowed("order_items") else dict(_EMPTY_CHANGES),
+        "payments": get_table_changes(Payment, serialize_payment, since_dt, has_updated_at=False) if allowed("payments") else dict(_EMPTY_CHANGES),
+        "expenses": get_table_changes(ExpenseItem, serialize_expense, since_dt, has_updated_at=False) if allowed("expenses") else dict(_EMPTY_CHANGES),
+        "stock_movements": get_table_changes(StockMovement, serialize_stock_movement, since_dt, has_updated_at=False) if allowed("stock_movements") else dict(_EMPTY_CHANGES),
     }
 
     current_timestamp = float(int(datetime.now(timezone.utc).timestamp() * 1000))

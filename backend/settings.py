@@ -190,6 +190,28 @@ CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='', cast=Csv())
 CORS_ALLOW_ALL_ORIGINS = DEBUG and not CORS_ALLOWED_ORIGINS
 GRAPHQL_IDE_ENABLED = config('GRAPHQL_IDE_ENABLED', default=DEBUG, cast=bool)
 
+# ======================================================
+# SECURITY HEADERS / COOKIE FLAGS
+# Active automatically when DEBUG=False. If TLS terminates
+# at a proxy, ensure it forwards X-Forwarded-Proto and set
+# SECURE_PROXY_SSL_HEADER accordingly.
+# ======================================================
+SECURE_SSL_REDIRECT            = not DEBUG
+SECURE_HSTS_SECONDS            = 31536000 if not DEBUG else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
+SECURE_HSTS_PRELOAD            = not DEBUG
+SECURE_CONTENT_TYPE_NOSNIFF    = True
+SECURE_BROWSER_XSS_FILTER      = True
+X_FRAME_OPTIONS                = 'DENY'
+SESSION_COOKIE_SECURE          = not DEBUG
+CSRF_COOKIE_SECURE             = not DEBUG
+SESSION_COOKIE_HTTPONLY        = True
+CSRF_COOKIE_SAMESITE           = 'Lax'
+SESSION_COOKIE_SAMESITE        = 'Lax'
+
+# Max GraphQL selection depth (see backend/extensions.py)
+GRAPHQL_MAX_DEPTH = config('GRAPHQL_MAX_DEPTH', default=12, cast=int)
+
 
 # ======================================================
 # JWT

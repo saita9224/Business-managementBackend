@@ -26,3 +26,14 @@ media/
 .vscode/
 .idea/
 *.swp
+
+# Ad-hoc API test payloads (may contain credentials)
+/*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+
+# Test/coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/

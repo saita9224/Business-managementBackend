@@ -7,6 +7,8 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from asgiref.sync import sync_to_async
 from django_tenants.utils import schema_context
@@ -541,9 +543,18 @@ def _hash_pin(pin: str) -> str:
 
 
 def _check_pin(stored_pin: str, raw_pin: str) -> bool:
-    if len(stored_pin) == 6 and stored_pin.isdigit():
-        return stored_pin == raw_pin
+    # All PINs are stored hashed via make_password — never compare
+    # plaintext. (Legacy plaintext rows, if any, must be re-issued.)
     return check_password(raw_pin, stored_pin)
+
+
+def _validate_new_password(password: str) -> None:
+    """Enforce AUTH_PASSWORD_VALIDATORS; surface as ValueError so
+    GraphQL mutations convert it to a clean GraphQLError."""
+    try:
+        validate_password(password)
+    except ValidationError as exc:
+        raise ValueError("; ".join(exc.messages))
 
 
 def _increment_pin_attempts(record):
@@ -561,12 +572,22 @@ def create_pending_registration(email: str, business_name: str) -> str:
 
     pin = generate_pin()
 
-    PendingRegistration.objects.filter(email__iexact=email).delete()
-    PendingRegistration.objects.create(
-        email=email,
-        business_name=business_name,
-        pin=_hash_pin(pin),
-    )
+    # Preserve the attempts counter across re-requests: otherwise an
+    # attacker could reset their guess budget by requesting a new PIN
+    # after every few wrong attempts. The record is only deleted after
+    # MAX_PIN_ATTEMPTS wrong guesses or successful verification.
+    existing = PendingRegistration.objects.filter(email__iexact=email).first()
+    if existing:
+        existing.business_name = business_name
+        existing.pin = _hash_pin(pin)
+        existing.expires_at = timezone.now() + timedelta(minutes=30)
+        existing.save(update_fields=["business_name", "pin", "expires_at"])
+    else:
+        PendingRegistration.objects.create(
+            email=email,
+            business_name=business_name,
+            pin=_hash_pin(pin),
+        )
 
     logger.info("Created pending registration for %s", email)
 
@@ -617,6 +638,8 @@ def complete_pending_registration(
         set_unusable_password=False,
     )
 
+    _validate_new_password(password)
+
     with schema_context(schema_name):
 
         employee.name = name
@@ -647,8 +670,22 @@ def create_password_reset_request(email: str) -> tuple:
 
     pin = generate_pin()
 
-    PasswordResetRequest.objects.filter(email__iexact=email).delete()
-    PasswordResetRequest.objects.create(email=email, pin=_hash_pin(pin))
+    # Preserve attempts across re-requests (see create_pending_registration)
+    # and record the target schema so complete_password_reset does not
+    # have to re-resolve the email — which is ambiguous when the same
+    # email exists in multiple tenants.
+    existing = PasswordResetRequest.objects.filter(email__iexact=email).first()
+    if existing:
+        existing.pin = _hash_pin(pin)
+        existing.expires_at = timezone.now() + timedelta(minutes=15)
+        existing.schema_name = schema_name
+        existing.save(update_fields=["pin", "expires_at", "schema_name"])
+    else:
+        PasswordResetRequest.objects.create(
+            email=email,
+            pin=_hash_pin(pin),
+            schema_name=schema_name,
+        )
 
     logger.info("Created password reset request for %s", email)
 
@@ -684,7 +721,16 @@ def verify_password_reset_pin(email: str, pin: str):
 def complete_password_reset(email: str, pin: str, new_password: str) -> tuple:
     reset_request = verify_password_reset_pin(email, pin)
 
-    employee, schema_name = find_employee_by_email(email)
+    _validate_new_password(new_password)
+
+    # Prefer the schema recorded when the reset was requested — the
+    # email may exist in multiple tenants and re-resolving could pick
+    # the wrong one. Fall back to email lookup for legacy rows.
+    schema_name = getattr(reset_request, "schema_name", "") or ""
+    if schema_name:
+        employee = find_employee_by_email_in_schema(email, schema_name)
+    else:
+        employee, schema_name = find_employee_by_email(email)
 
     if not employee:
         reset_request.delete()

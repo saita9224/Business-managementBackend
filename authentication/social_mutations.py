@@ -14,6 +14,9 @@ import strawberry
 from graphql import GraphQLError
 from asgiref.sync import sync_to_async
 from django_tenants.utils import schema_context
+from strawberry.types import Info
+
+from backend.throttling import rate_limit_ip
 
 from authentication.social import verify_google_token
 from authentication.services import (
@@ -56,6 +59,7 @@ class SocialAuthMutation:
     @strawberry.mutation
     async def google_auth(
         self,
+        info:          Info,
         id_token:      str,
         business_name: str | None = None,
     ) -> GoogleAuthPayload:
@@ -73,6 +77,10 @@ class SocialAuthMutation:
             No match + businessName       → create Business + admin + log in
             No match + no businessName    → error (contact admin)
         """
+
+        # 20 token verifications / hour per IP — google_auth can create
+        # new tenants, so it needs a tighter cap than plain logins.
+        rate_limit_ip(info, "googleauth", limit=20, window_seconds=3600)
 
         # 1. Verify token with Google's servers
         try:

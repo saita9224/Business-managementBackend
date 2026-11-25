@@ -10,6 +10,7 @@ from django.db import transaction
 from django.core.exceptions import ValidationError
 
 from employees.helpers import require_permission
+from backend.throttling import check_rate_limit
 
 from .types import (
     SyncMutationInput,
@@ -109,6 +110,10 @@ class SyncMutation:
         user = getattr(info.context, "user", None)
         if not user or not user.is_authenticated:
             raise GraphQLError("Authentication required")
+
+        # 60 sync batches / minute per user — generous for offline
+        # catch-up but blocks runaway retry loops.
+        check_rate_limit(f"pushsync:{user.id}", limit=60, window_seconds=60)
 
         results = await sync_to_async(_process_sync_batch)(info, mutations)
         return PushSyncPayload(results=results)

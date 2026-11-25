@@ -6,6 +6,7 @@ from strawberry.types import Info
 from asgiref.sync import sync_to_async
 
 from .decorators import permission_required
+from .helpers import require_permission
 from .types import (
     EmployeeType,
     RoleType,
@@ -231,6 +232,12 @@ class EmployeeMutation:
         password:   typing.Optional[str]            = None,
         role_names: typing.Optional[typing.List[str]] = None,
     ) -> EmployeeType:
+        # Role assignment is privileged — the decorator's self-update
+        # exception must not let users grant themselves roles (e.g.
+        # "Admin"). Require employee.update explicitly for role changes.
+        if role_names is not None:
+            require_permission(info, "employee.update")
+
         schema_name = _get_current_schema_name()
 
         # Capture the old email before update_employee overwrites it,
@@ -339,7 +346,7 @@ class EmployeeMutation:
         Called by an authenticated employee to verify their email.
         Requires a valid JWT in the Authorization header.
         The PIN was sent in their welcome email when their account
-        was created — it has no expiry.
+        was created — it expires after 30 minutes.
         """
         ctx  = info.context
         user = (

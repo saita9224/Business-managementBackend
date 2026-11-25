@@ -87,11 +87,12 @@ class PendingRegistration(models.Model):
 
 
 class PasswordResetRequest(models.Model):
-    email      = models.EmailField(unique=True, db_index=True)
-    pin        = models.CharField(max_length=128)
-    attempts   = models.PositiveSmallIntegerField(default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField()
+    email       = models.EmailField(unique=True, db_index=True)
+    schema_name = models.CharField(max_length=63, blank=True, default="")
+    pin         = models.CharField(max_length=128)
+    attempts    = models.PositiveSmallIntegerField(default=0)
+    created_at  = models.DateTimeField(auto_now_add=True)
+    expires_at  = models.DateTimeField()
 
     class Meta:
         app_label = 'tenants'

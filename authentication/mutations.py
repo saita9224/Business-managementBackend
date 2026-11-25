@@ -24,6 +24,12 @@ from .email_service import (
     send_password_reset_pin,
 )
 
+from backend.throttling import (
+    rate_limit_login,
+    rate_limit_auth_flow,
+    rate_limit_registration,
+)
+
 
 @strawberry.type
 class LoginPayload:
@@ -112,6 +118,7 @@ class AuthMutation:
         of issuing a token — the client must then call
         loginWithBusiness with the chosen schemaName.
         """
+        rate_limit_login(info, email)
         email_clean = email.strip().lower()
 
         matches = await sync_to_async(find_all_employees_by_email)(email_clean)
@@ -164,7 +171,8 @@ class AuthMutation:
     @strawberry.mutation
     async def login_with_business(
         self,
-        email:       str,
+        info:         Info,
+        email:        str,
         password:    str,
         schema_name: str,
     ) -> LoginPayload:
@@ -174,6 +182,7 @@ class AuthMutation:
         password is valid in this specific schema. Re-validates and
         issues a token scoped to that business.
         """
+        rate_limit_login(info, email)
         employee = await sync_to_async(find_employee_by_email_in_schema)(
             email.strip().lower(), schema_name.strip()
         )
@@ -202,10 +211,12 @@ class AuthMutation:
     @strawberry.mutation
     async def request_registration(
         self,
+        info: Info,
         email: str,
         business_name: str,
     ) -> RequestRegistrationPayload:
 
+        rate_limit_registration(info, email)
         existing, _ = await sync_to_async(
             find_employee_by_email
         )(email.strip().lower())
@@ -237,12 +248,14 @@ class AuthMutation:
     @strawberry.mutation
     async def verify_registration(
         self,
+        info: Info,
         email: str,
         pin: str,
         name: str,
         password: str,
     ) -> VerifyRegistrationPayload:
 
+        rate_limit_auth_flow(info, "verifyreg", email)
         try:
             pending = await sync_to_async(
                 verify_pending_registration
@@ -282,8 +295,10 @@ class AuthMutation:
     @strawberry.mutation
     async def request_password_reset(
         self,
+        info: Info,
         email: str,
     ) -> RequestPasswordResetPayload:
+        rate_limit_auth_flow(info, "pwresetreq", email)
         try:
             employee, schema_name, pin = await sync_to_async(
                 create_password_reset_request
@@ -306,11 +321,13 @@ class AuthMutation:
     @strawberry.mutation
     async def reset_password(
         self,
+        info: Info,
         email:        str,
         pin:          str,
         new_password: str,
     ) -> ResetPasswordPayload:
 
+        rate_limit_auth_flow(info, "pwreset", email)
         try:
             employee, schema_name = await sync_to_async(
                 complete_password_reset
