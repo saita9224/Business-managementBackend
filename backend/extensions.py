@@ -36,7 +36,10 @@ def _selection_depth(selection_set, level: int) -> int:
 class DepthLimitExtension(SchemaExtension):
     """Schema extension that rejects operations deeper than MAX_DEPTH."""
 
-    async def on_operation(self):
+    async def on_validate(self):
+        # on_operation runs before parsing, so graphql_document is
+        # still None there. on_validate runs after the document is
+        # parsed and before validation/execution.
         document = self.execution_context.graphql_document
         operation_name = self.execution_context.operation_name
 
