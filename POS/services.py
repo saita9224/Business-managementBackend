@@ -4,6 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
@@ -438,22 +439,22 @@ def recall_order(
     ).select_related("product")
 
     for movement in stock_movements:
-        try:
-            with transaction.atomic():
-                from inventory.services import add_stock
-                add_stock(
-                    product=movement.product,
-                    quantity=float(movement.quantity),
-                    reason=StockMovement.ADJUSTMENT,
-                    performed_by=recalled_by,
-                    notes=f"Stock reversal — order recalled: {receipt.receipt_number}",
-                )
-                movement.deducted_from_inventory = False
-                movement.notes = "Reversed on recall"
-                movement.save(update_fields=["deducted_from_inventory", "notes"])
-        except Exception:
-            movement.notes = "Reversal failed on recall"
-            movement.save(update_fields=["notes"])
+        # Do NOT swallow reversal errors: if stock cannot be restored,
+        # the recall must fail and roll back. Otherwise the receipt
+        # returns to DRAFT and a resubmit would deduct the same stock
+        # a second time.
+        with transaction.atomic():
+            from inventory.services import add_stock
+            add_stock(
+                product=movement.product,
+                quantity=float(movement.quantity),
+                reason=StockMovement.ADJUSTMENT,
+                performed_by=recalled_by,
+                notes=f"Stock reversal — order recalled: {receipt.receipt_number}",
+            )
+            movement.deducted_from_inventory = False
+            movement.notes = "Reversed on recall"
+            movement.save(update_fields=["deducted_from_inventory", "notes"])
 
     receipt.status       = Receipt.DRAFT
     receipt.submitted_at = None
@@ -493,7 +494,7 @@ def accept_payment(
             f"Cannot accept payment on a {receipt.status} receipt."
         )
 
-    paid    = sum(p.amount for p in receipt.payments.all())
+    paid    = receipt.payments.aggregate(total=Sum("amount"))["total"] or Decimal("0")
     balance = (receipt.total - paid).quantize(TWO, rounding=ROUND_HALF_UP)
 
     if amount > balance:
@@ -531,7 +532,7 @@ def create_credit_account(
             f"Cannot create credit on a {receipt.status} receipt."
         )
 
-    paid = sum(p.amount for p in receipt.payments.all())
+    paid = receipt.payments.aggregate(total=Sum("amount"))["total"] or Decimal("0")
     balance = (receipt.total - paid).quantize(TWO, rounding=ROUND_HALF_UP)
 
     if balance <= 0:
@@ -574,7 +575,7 @@ def settle_credit(
     if amount <= 0:
         raise ValidationError("Amount must be greater than zero.")
 
-    paid    = sum(p.amount for p in receipt.payments.all())
+    paid    = receipt.payments.aggregate(total=Sum("amount"))["total"] or Decimal("0")
     balance = (receipt.total - paid).quantize(TWO, rounding=ROUND_HALF_UP)
 
     if amount > balance:
