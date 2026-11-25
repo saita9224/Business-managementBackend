@@ -1,7 +1,7 @@
 # expenses/queries.py
 
 import strawberry
-from typing import List
+from typing import List, Optional
 from asgiref.sync import sync_to_async
 
 from employees.decorators import permission_required
@@ -32,12 +32,24 @@ class ExpenseQuery:
 
     @strawberry.field
     @permission_required("expenses.view")
-    async def all_expenses(self, info) -> List[ExpenseItemType]:
-        return await sync_to_async(list)(
-            ExpenseItem.objects
-            .select_related("supplier", "related_product")
-            .order_by("-created_at")
-        )
+    async def all_expenses(
+        self,
+        info,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[ExpenseItemType]:
+        def fetch():
+            qs = (
+                ExpenseItem.objects
+                .select_related("supplier", "related_product")
+                .order_by("-created_at")
+            )
+            if limit is not None:
+                return list(qs[offset: offset + min(limit, 1000)])
+            if offset:
+                return list(qs[offset:])
+            return list(qs)
+        return await sync_to_async(fetch)()
 
     # =========================================================
     # ALL PAYMENTS
@@ -50,12 +62,24 @@ class ExpenseQuery:
 
     @strawberry.field
     @permission_required("expenses.view")
-    async def all_payments(self, info) -> List[ExpensePaymentType]:
-        return await sync_to_async(list)(
-            ExpensePayment.objects
-            .select_related("expense", "expense__supplier")
-            .order_by("-paid_at")
-        )
+    async def all_payments(
+        self,
+        info,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[ExpensePaymentType]:
+        def fetch():
+            qs = (
+                ExpensePayment.objects
+                .select_related("expense", "expense__supplier")
+                .order_by("-paid_at")
+            )
+            if limit is not None:
+                return list(qs[offset: offset + min(limit, 1000)])
+            if offset:
+                return list(qs[offset:])
+            return list(qs)
+        return await sync_to_async(fetch)()
 
     # =========================================================
     # SEARCH EXPENSES

@@ -110,6 +110,8 @@ class InventoryQuery:
         info:     Info,
         search:   Optional[str] = None,
         category: Optional[str] = None,
+        limit:    Optional[int] = None,
+        offset:   int = 0,
     ) -> List[ProductType]:
 
         def fetch():
@@ -122,6 +124,10 @@ class InventoryQuery:
                 qs = qs.filter(name__icontains=search)
             if category:
                 qs = qs.filter(category__name__iexact=category)
+            if limit is not None:
+                return list(qs[offset: offset + min(limit, 1000)])
+            if offset:
+                return list(qs[offset:])
             return list(qs)
 
         products = await sync_to_async(fetch)()
@@ -173,6 +179,8 @@ class InventoryQuery:
         self,
         info:       Info,
         product_id: Optional[strawberry.ID] = None,
+        limit:      Optional[int] = None,
+        offset:     int = 0,
     ) -> List[StockMovementType]:
 
         def fetch():
@@ -183,6 +191,10 @@ class InventoryQuery:
             )
             if product_id:
                 qs = qs.filter(product_id=product_id)
+            if limit is not None:
+                return list(qs[offset: offset + min(limit, 1000)])
+            if offset:
+                return list(qs[offset:])
             return list(qs)
 
         return await sync_to_async(fetch)()

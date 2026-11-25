@@ -36,6 +36,24 @@ def _set_schema_to_public():
     conn.set_schema_to_public()
 
 
+def _load_permission_codes(user):
+    """
+    Resolve the user's permission codes once per request.
+    Returns {"*"} for Admin (full bypass) or a set of codes.
+    Must run after the tenant schema is active.
+    """
+    from employees.models import RolePermission
+
+    if user.roles.filter(name__iexact="Admin").exists():
+        return {"*"}
+
+    return set(
+        RolePermission.objects
+        .filter(role__in=user.roles.all())
+        .values_list("permission__code", flat=True)
+    )
+
+
 class JWTMiddleware(SchemaExtension):
 
     async def on_operation(self):
@@ -127,6 +145,16 @@ class JWTMiddleware(SchemaExtension):
                                         jwt_schema_name
                                     )
                                     schema_switched = True
+
+                            # Cache the user's permission codes once per
+                            # request so require_permission() doesn't hit
+                            # the DB on every resolver field. Runs after
+                            # any schema switch so queries hit the right
+                            # tenant tables.
+                            perm_codes = await sync_to_async(
+                                _load_permission_codes
+                            )(user)
+                            set_attr(context, "permission_codes", perm_codes)
                         else:
                             logger.debug("Invalid or expired token")
 

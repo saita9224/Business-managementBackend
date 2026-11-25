@@ -13,10 +13,7 @@ from authentication.social_mutations import SocialAuthMutation
 from authentication.mutations import AuthMutation
 
 
-from expenses.dataloaders  import create_expenses_dataloaders
-from inventory.dataloaders import create_inventory_dataloaders
-from POS.dataloaders       import create_pos_dataloaders
-from hr.dataloaders        import create_hr_dataloaders
+from backend.graphql_context import inject_dataloaders
 from backend.schema        import schema
 
 
@@ -63,6 +60,7 @@ class SuperAdminMutation:
     @strawberry.mutation
     async def super_admin_login(
         self,
+        info,
         email:    str,
         password: str,
     ) -> "SuperAdminLoginPayload":
@@ -71,6 +69,9 @@ class SuperAdminMutation:
         from tenants.models import SuperAdmin
         from authentication.services import create_super_admin_jwt
         from graphql import GraphQLError
+        from backend.throttling import rate_limit_ip
+
+        rate_limit_ip(info, "superadmin", limit=5, window_seconds=900)
 
         def _authenticate(email: str, password: str):
             try:
@@ -169,26 +170,7 @@ class TenantGraphQLView(AsyncGraphQLView):
 
     async def get_context(self, request, response):
         base_context = await super().get_context(request, response)
-
-        expenses_loaders = create_expenses_dataloaders()
-        base_context.supplier_loader             = expenses_loaders["supplier_loader"]
-        base_context.product_loader              = expenses_loaders["product_loader"]
-        base_context.payments_by_expense_loader  = expenses_loaders["payments_by_expense_loader"]
-        base_context.expenses_by_supplier_loader = expenses_loaders["expenses_by_supplier_loader"]
-        base_context.payment_total_loader        = expenses_loaders["payment_total_loader"]
-
-        for key, loader in create_inventory_dataloaders().items():
-            setattr(base_context, key, loader)
-
-        for key, loader in create_pos_dataloaders().items():
-            setattr(base_context, key, loader)
-
-        for key, loader in create_hr_dataloaders().items():
-            setattr(base_context, key, loader)
-
-        base_context.tenant = getattr(request, 'tenant', None)
-
-        return base_context
+        return await inject_dataloaders(base_context, request)
 
 
 # ======================================================

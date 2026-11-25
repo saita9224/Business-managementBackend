@@ -53,6 +53,8 @@ class POSQuery:
         info: Info,
         employee_id: Optional[int] = None,
         active_only: bool = False,
+        limit: Optional[int] = None,
+        offset: int = 0,
     ) -> List[POSSessionType]:
         def fetch():
             qs = POSSession.objects.select_related("employee").order_by("-opened_at")
@@ -60,6 +62,10 @@ class POSQuery:
                 qs = qs.filter(employee_id=employee_id)
             if active_only:
                 qs = qs.filter(is_active=True)
+            if limit is not None:
+                return list(qs[offset: offset + min(limit, 1000)])
+            if offset:
+                return list(qs[offset:])
             return list(qs)
         return await sync_to_async(fetch)()
 

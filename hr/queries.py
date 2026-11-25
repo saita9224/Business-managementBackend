@@ -69,6 +69,8 @@ class HRQuery:
         self,
         info: Info,
         active_only: bool = True,
+        limit:      Optional[int] = None,
+        offset:     int = 0,
     ) -> List[EmployeeContractType]:
         """Manager lists all employee contracts."""
 
@@ -76,7 +78,12 @@ class HRQuery:
             qs = EmployeeContract.objects.select_related("employee")
             if active_only:
                 qs = qs.filter(is_active=True)
-            return list(qs.order_by("employee__name"))
+            qs = qs.order_by("employee__name")
+            if limit is not None:
+                return list(qs[offset: offset + min(limit, 1000)])
+            if offset:
+                return list(qs[offset:])
+            return list(qs)
 
         contracts = await sync_to_async(fetch)()
         return [wrap_contract(c) for c in contracts]
@@ -311,6 +318,8 @@ class HRQuery:
         info: Info,
         status:      Optional[str]         = None,
         employee_id: Optional[strawberry.ID] = None,
+        limit:       Optional[int]         = None,
+        offset:      int                    = 0,
     ) -> List[LeaveRequestType]:
         """Manager views all leave requests, optionally filtered."""
 
@@ -322,6 +331,10 @@ class HRQuery:
                 qs = qs.filter(status=status)
             if employee_id:
                 qs = qs.filter(employee_id=employee_id)
+            if limit is not None:
+                return list(qs[offset: offset + min(limit, 1000)])
+            if offset:
+                return list(qs[offset:])
             return list(qs)
 
         requests = await sync_to_async(fetch)()
@@ -340,6 +353,8 @@ class HRQuery:
         month:       Optional[int]         = None,
         employee_id: Optional[strawberry.ID] = None,
         status:      Optional[str]         = None,
+        limit:       Optional[int]         = None,
+        offset:      int                    = 0,
     ) -> List[SalaryRecordType]:
         """Manager views all payslips with optional filters."""
 
@@ -355,6 +370,10 @@ class HRQuery:
                 qs = qs.filter(employee_id=employee_id)
             if status:
                 qs = qs.filter(status=status)
+            if limit is not None:
+                return list(qs[offset: offset + min(limit, 1000)])
+            if offset:
+                return list(qs[offset:])
             return list(qs)
 
         records = await sync_to_async(fetch)()

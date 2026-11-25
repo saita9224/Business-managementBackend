@@ -26,12 +26,6 @@ def require_permission(info, permission_name: str, target_employee_id=None):
         raise GraphQLError("User account is inactive")
 
     # --------------------------
-    # 1. ADMIN BYPASS
-    # --------------------------
-    if user.roles.filter(name__iexact="Admin").exists():
-        return True
-
-    # --------------------------
     # 2. SELF-UPDATE EXCEPTION
     # --------------------------
     if permission_name == "employee.update" and target_employee_id:
@@ -39,8 +33,27 @@ def require_permission(info, permission_name: str, target_employee_id=None):
             return True     # Allow user to update their own account
 
     # --------------------------
-    # 3. NORMAL ROLE-BASED CHECK
+    # 3. CACHED PERMISSION CHECK
+    # JWTMiddleware resolves the user's permission codes once per
+    # request into context["permission_codes"] ({"*"} for Admin).
     # --------------------------
+    try:
+        cached = ctx.get("permission_codes") if isinstance(ctx, dict) else getattr(ctx, "permission_codes", None)
+    except Exception:
+        cached = getattr(ctx, "permission_codes", None)
+
+    if cached is not None:
+        if "*" in cached or permission_name in cached:
+            return True
+        raise GraphQLError(f"Permission denied: {permission_name}")
+
+    # --------------------------
+    # 4. FALLBACK DB CHECK
+    # (requests that bypass JWTMiddleware, e.g. tests)
+    # --------------------------
+    if user.roles.filter(name__iexact="Admin").exists():
+        return True
+
     roles = user.roles.all()
     if not roles.exists():
         raise GraphQLError("User has no role assigned")
@@ -52,7 +65,5 @@ def require_permission(info, permission_name: str, target_employee_id=None):
 
     if not allowed:
         raise GraphQLError(f"Permission denied: {permission_name}")
-    
-    
 
     return True

@@ -191,7 +191,17 @@ class EmployeeQuery:
 
     @strawberry.field
     @permission_required("employee.view")
-    async def employees(self, info: Info) -> typing.List[EmployeeType]:
-        return await sync_to_async(list)(
-            Employee.objects.prefetch_related("roles").all()
-        )
+    async def employees(
+        self,
+        info: Info,
+        limit: typing.Optional[int] = None,
+        offset: int = 0,
+    ) -> typing.List[EmployeeType]:
+        def fetch():
+            qs = Employee.objects.prefetch_related("roles").order_by("id")
+            if limit is not None:
+                return list(qs[offset: offset + min(limit, 1000)])
+            if offset:
+                return list(qs[offset:])
+            return list(qs)
+        return await sync_to_async(fetch)()

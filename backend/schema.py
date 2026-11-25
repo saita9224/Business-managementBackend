@@ -18,6 +18,7 @@ from sync.queries          import SyncQuery
 
 from tenants.schema     import TenantQuery, TenantMutation
 from .middleware import JWTMiddleware
+from .extensions import DepthLimitExtension
 
 
 @strawberry.type
@@ -54,5 +55,5 @@ class Mutation(
 schema = strawberry.Schema(
     query=Query,
     mutation=Mutation,
-    extensions=[JWTMiddleware],
+    extensions=[DepthLimitExtension, JWTMiddleware],
 )
