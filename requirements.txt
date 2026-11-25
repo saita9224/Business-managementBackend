@@ -4,6 +4,7 @@ certifi==2026.4.22
 colorama==0.4.6
 Django==5.2.8
 django-cors-headers==4.9.0
+django-extensions==4.1
 django-tenants==3.10.1
 graphql-core==3.2.7
 greenlet==3.2.4
