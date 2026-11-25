@@ -35,6 +35,11 @@ def wrap_product(product: Product, current_stock: float) -> ProductType:
         ),
         unit=product.unit,
         auto_deduct_on_sale=product.auto_deduct_on_sale,
+        cost_per_unit=(
+            float(product.cost_per_unit)
+            if product.cost_per_unit is not None
+            else None
+        ),
         created_at=product.created_at,
         _current_stock=current_stock,
     )

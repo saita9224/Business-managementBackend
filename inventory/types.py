@@ -118,6 +118,7 @@ class ProductType:
     name:                str
     unit:                str
     auto_deduct_on_sale: bool
+    cost_per_unit:       Optional[float]
     created_at:          datetime
 
     # category is now a CategoryType object, not a plain string
