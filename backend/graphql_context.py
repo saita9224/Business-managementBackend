@@ -12,6 +12,7 @@ from expenses.dataloaders  import create_expenses_dataloaders
 from inventory.dataloaders import create_inventory_dataloaders
 from POS.dataloaders       import create_pos_dataloaders
 from hr.dataloaders        import create_hr_dataloaders
+from employees.dataloaders import create_employees_dataloaders
 
 
 async def inject_dataloaders(base_context, request):
@@ -36,6 +37,10 @@ async def inject_dataloaders(base_context, request):
 
     # ── HR ────────────────────────────────────────────────
     for key, loader in create_hr_dataloaders().items():
+        setattr(base_context, key, loader)
+
+    # ── Employees ─────────────────────────────────────────
+    for key, loader in create_employees_dataloaders().items():
         setattr(base_context, key, loader)
 
     # ── Current tenant ────────────────────────────────────

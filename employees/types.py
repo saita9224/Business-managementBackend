@@ -4,8 +4,6 @@ import typing
 import strawberry
 from strawberry.types import Info
 
-from .models import Permission
-
 
 @strawberry.type
 class PermissionType:
@@ -21,8 +19,10 @@ class RoleType:
     description: typing.Optional[str]
 
     @strawberry.field
-    def permissions(self) -> typing.List[PermissionType]:
-        perms = Permission.objects.filter(rolepermission__role_id=self.id)
+    async def permissions(self, info: Info) -> typing.List[PermissionType]:
+        perms = await info.context.permissions_by_role_loader.load(
+            int(self.id)
+        )
         return [
             PermissionType(id=p.id, name=p.name, description=p.description)
             for p in perms

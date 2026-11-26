@@ -3,6 +3,8 @@
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Sum, Q, DecimalField
+from django.db.models.functions import Coalesce
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
@@ -489,6 +491,28 @@ def submit_reconciliation(
         for p in Product.objects.filter(pk__in=product_ids)
     }
 
+    # Batch stock levels — product.current_stock runs an aggregate
+    # query per product (N+1). One grouped query instead.
+    stock_rows = (
+        StockMovement.objects
+        .filter(product_id__in=product_ids)
+        .values("product_id")
+        .annotate(
+            total_in=Coalesce(
+                Sum("quantity", filter=Q(movement_type=StockMovement.IN)),
+                Decimal("0"), output_field=DecimalField(),
+            ),
+            total_out=Coalesce(
+                Sum("quantity", filter=Q(movement_type=StockMovement.OUT)),
+                Decimal("0"), output_field=DecimalField(),
+            ),
+        )
+    )
+    stock_map = {
+        row["product_id"]: float(row["total_in"] - row["total_out"])
+        for row in stock_rows
+    }
+
     reconciliations = []
     for entry in counts:
         pid         = entry["product_id"]
@@ -503,7 +527,7 @@ def submit_reconciliation(
         if not product:
             raise ValidationError(f"Product with ID {pid} not found")
 
-        system_qty = float(product.current_stock)
+        system_qty = stock_map.get(pid, 0.0)
         difference = counted_qty - system_qty
 
         reconciliations.append(

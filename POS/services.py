@@ -1,5 +1,6 @@
 # POS/services.py
 
+from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
 from django.core.exceptions import ValidationError
@@ -361,6 +362,29 @@ def submit_order(
     if not orders:
         raise ValidationError("Receipt has no items.")
 
+    # Prefetch everything the loop needs — without this each item
+    # costs a menu_item fetch, an ingredients query, and a
+    # Product.objects.get (N+1 per receipt line).
+    all_items = [item for order in orders for item in order.items.all()]
+
+    product_ids   = {i.product_id for i in all_items if i.product_id}
+    menu_item_ids = {i.menu_item_id for i in all_items if i.menu_item_id}
+
+    products_map = {
+        p.id: p for p in Product.objects.filter(id__in=product_ids)
+    }
+    menu_items_map = {
+        m.id: m for m in MenuItem.objects.filter(id__in=menu_item_ids)
+    }
+    ingredients_map = defaultdict(list)
+    if menu_item_ids:
+        for ing in (
+            MenuItemIngredient.objects
+            .filter(menu_item_id__in=menu_item_ids)
+            .select_related("product")
+        ):
+            ingredients_map[ing.menu_item_id].append(ing)
+
     subtotal = Decimal("0.00")
 
     for order in orders:
@@ -369,12 +393,11 @@ def submit_order(
                 TWO, rounding=ROUND_HALF_UP
             )
 
-            menu_item = getattr(item, "menu_item", None)
-            ingredients = []
-            if menu_item is not None:
-                ingredients = list(
-                    menu_item.ingredients.select_related("product")
-                )
+            menu_item = menu_items_map.get(item.menu_item_id)
+            ingredients = (
+                ingredients_map.get(menu_item.id, [])
+                if menu_item is not None else []
+            )
 
             if ingredients:
                 # Recipe item: deduct each ingredient's base-unit quantity.
@@ -423,8 +446,8 @@ def submit_order(
             product            = None
 
             try:
-                product = Product.objects.get(pk=item.product_id)
-            except Product.DoesNotExist:
+                product = products_map[item.product_id]
+            except KeyError:
                 raise ValidationError(
                     f"Product {item.product_id} not found in inventory"
                 )

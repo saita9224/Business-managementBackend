@@ -1,6 +1,8 @@
 # inventory/models.py
 
 from django.db import models
+from django.db.models import Q, Value, DecimalField
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -75,20 +77,21 @@ class Product(models.Model):
         return self.name
 
     @property
-    def current_stock(self) -> float:
-        ins = (
-            self.movements
-            .filter(movement_type=StockMovement.IN)
-            .aggregate(total=models.Sum("quantity"))["total"]
-            or 0
+    def current_stock(self):
+        # Single aggregate query — previously ran two separate
+        # SUM queries (one for IN, one for OUT), which multiplied
+        # into N+1 anywhere current_stock is read in a loop.
+        agg = self.movements.aggregate(
+            ins=Coalesce(
+                models.Sum("quantity", filter=Q(movement_type=StockMovement.IN)),
+                Value(0), output_field=DecimalField(),
+            ),
+            outs=Coalesce(
+                models.Sum("quantity", filter=Q(movement_type=StockMovement.OUT)),
+                Value(0), output_field=DecimalField(),
+            ),
         )
-        outs = (
-            self.movements
-            .filter(movement_type=StockMovement.OUT)
-            .aggregate(total=models.Sum("quantity"))["total"]
-            or 0
-        )
-        return ins - outs
+        return agg["ins"] - agg["outs"]
 
 
 # ======================================================
