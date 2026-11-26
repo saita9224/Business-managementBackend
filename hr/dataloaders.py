@@ -108,6 +108,19 @@ async def load_payments_by_salary_record(
 
 
 # ──────────────────────────────────────────────────────
+# EMPLOYEE REFS (batched HREmployeeRef lookups)
+# ──────────────────────────────────────────────────────
+
+async def load_employee_refs(keys: List[int]):
+    from employees.models import Employee
+    emps = await sync_to_async(list)(
+        Employee.objects.filter(id__in=keys)
+    )
+    emp_map = {e.id: e for e in emps}
+    return [emp_map.get(k) for k in keys]
+
+
+# ──────────────────────────────────────────────────────
 # LOADER FACTORY (REQUEST SCOPED)
 # ──────────────────────────────────────────────────────
 
@@ -122,4 +135,5 @@ def create_hr_dataloaders() -> dict:
         "leave_requests_by_employee":    DataLoader(load_fn=load_leave_requests_by_employee),
         "salary_records_by_employee":    DataLoader(load_fn=load_salary_records_by_employee),
         "payments_by_salary_record":     DataLoader(load_fn=load_payments_by_salary_record),
+        "employee_ref_loader":           DataLoader(load_fn=load_employee_refs),
     }

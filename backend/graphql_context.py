@@ -24,6 +24,7 @@ async def inject_dataloaders(base_context, request):
     base_context.payments_by_expense_loader  = expenses_loaders["payments_by_expense_loader"]
     base_context.expenses_by_supplier_loader = expenses_loaders["expenses_by_supplier_loader"]
     base_context.payment_total_loader        = expenses_loaders["payment_total_loader"]
+    base_context.expense_loader              = expenses_loaders["expense_loader"]
 
     # ── Inventory ─────────────────────────────────────────
     for key, loader in create_inventory_dataloaders().items():

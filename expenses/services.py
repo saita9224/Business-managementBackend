@@ -293,6 +293,7 @@ def get_expense_details(expense_id: int) -> dict:
     payments = list(
         ExpensePayment.objects
         .filter(expense=expense)
+        .select_related("expense", "expense__supplier")
         .order_by("paid_at")
     )
 

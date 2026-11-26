@@ -35,10 +35,10 @@ def require_auth(info: Info):
 
 # ── Internal helper ────────────────────────────────────
 
-async def _fetch_employee_ref(employee_id: int) -> HREmployeeRef:
-    from employees.models import Employee
-    from asgiref.sync import sync_to_async
-    emp = await sync_to_async(Employee.objects.get)(pk=employee_id)
+async def _fetch_employee_ref(info: Info, employee_id: int) -> HREmployeeRef:
+    emp = await info.context.employee_ref_loader.load(employee_id)
+    if not emp:
+        raise GraphQLError("Employee not found")
     return HREmployeeRef(
         id=emp.id,
         name=emp.name,
@@ -72,7 +72,7 @@ class EmployeeContractType:
     @strawberry.field
     async def employee(self, info: Info) -> HREmployeeRef:
         require_auth(info)
-        return await _fetch_employee_ref(self._employee_id)
+        return await _fetch_employee_ref(info, self._employee_id)
 
     @strawberry.field
     def leave_pay_weight(self) -> float:
@@ -105,14 +105,14 @@ class AttendanceRecordType:
     @strawberry.field
     async def employee(self, info: Info) -> HREmployeeRef:
         require_auth(info)
-        return await _fetch_employee_ref(self._employee_id)
+        return await _fetch_employee_ref(info, self._employee_id)
 
     @strawberry.field
     async def recorded_by(self, info: Info) -> Optional[HREmployeeRef]:
         require_auth(info)
         if not self._recorded_by_id:
             return None
-        return await _fetch_employee_ref(self._recorded_by_id)
+        return await _fetch_employee_ref(info, self._recorded_by_id)
 
     @strawberry.field
     def attendance_weight(self) -> float:
@@ -146,14 +146,14 @@ class LeaveRequestType:
     @strawberry.field
     async def employee(self, info: Info) -> HREmployeeRef:
         require_auth(info)
-        return await _fetch_employee_ref(self._employee_id)
+        return await _fetch_employee_ref(info, self._employee_id)
 
     @strawberry.field
     async def reviewed_by(self, info: Info) -> Optional[HREmployeeRef]:
         require_auth(info)
         if not self._reviewed_by_id:
             return None
-        return await _fetch_employee_ref(self._reviewed_by_id)
+        return await _fetch_employee_ref(info, self._reviewed_by_id)
 
     @strawberry.field
     def total_days(self) -> int:
@@ -181,7 +181,7 @@ class SalaryPaymentType:
         require_auth(info)
         if not self._paid_by_id:
             return None
-        return await _fetch_employee_ref(self._paid_by_id)
+        return await _fetch_employee_ref(info, self._paid_by_id)
 
 
 # ======================================================
@@ -212,14 +212,14 @@ class SalaryRecordType:
     @strawberry.field
     async def employee(self, info: Info) -> HREmployeeRef:
         require_auth(info)
-        return await _fetch_employee_ref(self._employee_id)
+        return await _fetch_employee_ref(info, self._employee_id)
 
     @strawberry.field
     async def approved_by(self, info: Info) -> Optional[HREmployeeRef]:
         require_auth(info)
         if not self._approved_by_id:
             return None
-        return await _fetch_employee_ref(self._approved_by_id)
+        return await _fetch_employee_ref(info, self._approved_by_id)
 
     @strawberry.field
     def is_fully_paid(self) -> bool:

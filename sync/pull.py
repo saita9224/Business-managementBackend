@@ -1,7 +1,11 @@
 # sync/pull.py
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Dict, Any, Optional
+
+from django.db.models import Sum, Q, Value, DecimalField
+from django.db.models.functions import Coalesce
 
 from inventory.models import Product, Category, StockMovement
 from POS.models import Receipt, Order, OrderItem, Payment, MenuCategory, MenuItem
@@ -24,13 +28,21 @@ def _to_epoch_ms(dt: Optional[datetime]) -> Optional[int]:
 
 
 def serialize_product(p: Product) -> Dict[str, Any]:
+    # When the queryset annotates _stock_in/_stock_out (see
+    # _with_stock below), use them — p.current_stock would run
+    # two aggregate queries per product (N+1 on every pull).
+    stock_in = getattr(p, "_stock_in", None)
+    if stock_in is not None:
+        current_stock = float(stock_in - (p._stock_out or 0))
+    else:
+        current_stock = float(p.current_stock)
     return {
         "id": str(p.id),
         "client_id": str(p.client_id) if p.client_id else None,
         "name": p.name,
         "category_id": str(p.category_id) if p.category_id else None,
         "unit": p.unit,
-        "current_stock": float(p.current_stock),
+        "current_stock": current_stock,
         "auto_deduct_on_sale": p.auto_deduct_on_sale,
         "created_at": _to_epoch_ms(p.created_at),
         "updated_at": _to_epoch_ms(p.updated_at),
@@ -125,8 +137,11 @@ def serialize_payment(p: Payment) -> Dict[str, Any]:
 
 
 def serialize_expense(e: ExpenseItem) -> Dict[str, Any]:
-    from django.db.models import Sum
-    paid = e.payments.aggregate(total=Sum("amount"))["total"] or 0
+    # e.payments.all() uses the prefetch cache when the queryset
+    # prefetches payments (see _expenses_prefetch below); without
+    # it this is one query per expense — same cost as the old
+    # per-expense aggregate, never worse.
+    paid = sum((p.amount for p in e.payments.all()), Decimal("0"))
     return {
         "id": str(e.id),
         "client_id": str(e.client_id) if e.client_id else None,
@@ -157,9 +172,15 @@ def serialize_stock_movement(sm: StockMovement) -> Dict[str, Any]:
     }
 
 
-def get_table_changes(model_cls, serializer, since_dt: Optional[datetime], has_updated_at: bool = False) -> Dict[str, Any]:
+def get_table_changes(model_cls, serializer, since_dt: Optional[datetime], has_updated_at: bool = False, queryset_fn=None) -> Dict[str, Any]:
+    def base_qs():
+        qs = model_cls.objects.all()
+        if queryset_fn:
+            qs = queryset_fn(qs)
+        return qs
+
     if not since_dt:
-        all_objs = list(model_cls.objects.all())
+        all_objs = list(base_qs())
         return {
             "created": [serializer(obj) for obj in all_objs],
             "updated": [],
@@ -167,15 +188,15 @@ def get_table_changes(model_cls, serializer, since_dt: Optional[datetime], has_u
         }
 
     if has_updated_at:
-        created_objs = list(model_cls.objects.filter(created_at__gt=since_dt))
-        updated_objs = list(model_cls.objects.filter(updated_at__gt=since_dt, created_at__lte=since_dt))
+        created_objs = list(base_qs().filter(created_at__gt=since_dt))
+        updated_objs = list(base_qs().filter(updated_at__gt=since_dt, created_at__lte=since_dt))
         return {
             "created": [serializer(obj) for obj in created_objs],
             "updated": [serializer(obj) for obj in updated_objs],
             "deleted": [],
         }
     else:
-        created_objs = list(model_cls.objects.filter(created_at__gt=since_dt))
+        created_objs = list(base_qs().filter(created_at__gt=since_dt))
         return {
             "created": [serializer(obj) for obj in created_objs],
             "updated": [],
@@ -203,6 +224,29 @@ TABLE_PERMISSIONS = {
 _EMPTY_CHANGES = {"created": [], "updated": [], "deleted": []}
 
 
+def _with_stock(qs):
+    """Annotate products with IN/OUT movement sums so
+    serialize_product doesn't hit Product.current_stock
+    (2 aggregate queries per product)."""
+    return qs.annotate(
+        _stock_in=Coalesce(
+            Sum("movements__quantity",
+                filter=Q(movements__movement_type=StockMovement.IN)),
+            Value(0), output_field=DecimalField(),
+        ),
+        _stock_out=Coalesce(
+            Sum("movements__quantity",
+                filter=Q(movements__movement_type=StockMovement.OUT)),
+            Value(0), output_field=DecimalField(),
+        ),
+    )
+
+
+def _expenses_prefetch(qs):
+    """Batch supplier + payments for serialize_expense."""
+    return qs.select_related("supplier").prefetch_related("payments")
+
+
 def _user_permission_codes(user) -> set:
     """Return the set of permission codes for the user, or {'*'} for Admin."""
     if user is None:
@@ -225,7 +269,7 @@ def extract_pull_changes(last_pulled_at: Optional[float], user=None) -> Dict[str
         return "*" in perms or TABLE_PERMISSIONS[table] in perms
 
     changes = {
-        "products": get_table_changes(Product, serialize_product, since_dt, has_updated_at=True) if allowed("products") else dict(_EMPTY_CHANGES),
+        "products": get_table_changes(Product, serialize_product, since_dt, has_updated_at=True, queryset_fn=_with_stock) if allowed("products") else dict(_EMPTY_CHANGES),
         "categories": get_table_changes(Category, serialize_category, since_dt, has_updated_at=True) if allowed("categories") else dict(_EMPTY_CHANGES),
         "menu_categories": get_table_changes(MenuCategory, serialize_menu_category, since_dt, has_updated_at=True) if allowed("menu_categories") else dict(_EMPTY_CHANGES),
         "menu_items": get_table_changes(MenuItem, serialize_menu_item, since_dt, has_updated_at=True) if allowed("menu_items") else dict(_EMPTY_CHANGES),
@@ -233,7 +277,7 @@ def extract_pull_changes(last_pulled_at: Optional[float], user=None) -> Dict[str
         "orders": get_table_changes(Order, serialize_order, since_dt, has_updated_at=False) if allowed("orders") else dict(_EMPTY_CHANGES),
         "order_items": get_table_changes(OrderItem, serialize_order_item, since_dt, has_updated_at=False) if allowed("order_items") else dict(_EMPTY_CHANGES),
         "payments": get_table_changes(Payment, serialize_payment, since_dt, has_updated_at=False) if allowed("payments") else dict(_EMPTY_CHANGES),
-        "expenses": get_table_changes(ExpenseItem, serialize_expense, since_dt, has_updated_at=False) if allowed("expenses") else dict(_EMPTY_CHANGES),
+        "expenses": get_table_changes(ExpenseItem, serialize_expense, since_dt, has_updated_at=False, queryset_fn=_expenses_prefetch) if allowed("expenses") else dict(_EMPTY_CHANGES),
         "stock_movements": get_table_changes(StockMovement, serialize_stock_movement, since_dt, has_updated_at=False) if allowed("stock_movements") else dict(_EMPTY_CHANGES),
     }
 

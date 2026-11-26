@@ -46,6 +46,24 @@ async def load_products(keys: List[int]) -> List[Product]:
 
 
 # ==========================================================
+# EXPENSE ITEM LOADER
+# Single-object lookup used by StockMovementType.expense
+# ==========================================================
+
+async def load_expense_items(keys: List[int]) -> List[ExpenseItem]:
+
+    items = await sync_to_async(list)(
+        ExpenseItem.objects.filter(id__in=keys)
+    )
+
+    item_map: Dict[int, ExpenseItem] = {
+        item.id: item for item in items
+    }
+
+    return [item_map.get(k) for k in keys]
+
+
+# ==========================================================
 # PAYMENTS BY EXPENSE
 # ==========================================================
 
@@ -54,6 +72,7 @@ async def load_payments(keys: List[int]) -> List[List[ExpensePayment]]:
     payments = await sync_to_async(list)(
         ExpensePayment.objects
         .filter(expense_id__in=keys)
+        .select_related("expense", "expense__supplier")
         .order_by("paid_at")
     )
 
@@ -72,7 +91,9 @@ async def load_payments(keys: List[int]) -> List[List[ExpensePayment]]:
 async def load_expenses_by_supplier(keys: List[int]) -> List[List[ExpenseItem]]:
 
     items = await sync_to_async(list)(
-        ExpenseItem.objects.filter(supplier_id__in=keys)
+        ExpenseItem.objects
+        .filter(supplier_id__in=keys)
+        .select_related("supplier", "related_product")
     )
 
     grouped: Dict[int, List[ExpenseItem]] = {}
@@ -131,4 +152,8 @@ def create_expenses_dataloaders():
         # aggregated payment totals
         "payment_total_loader":
             DataLoader(load_fn=load_payment_totals),
+
+        # single expense item lookup
+        "expense_loader":
+            DataLoader(load_fn=load_expense_items),
     }
