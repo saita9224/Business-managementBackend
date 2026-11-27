@@ -52,6 +52,30 @@ class ExpenseLinkType:
 
 
 # ============================================================
+# STOCK MOVEMENT REASON TYPE
+# ============================================================
+
+@strawberry.type
+class StockMovementReasonType:
+    id: strawberry.ID
+    code: str
+    name: str
+    applies_to_in: bool
+    applies_to_out: bool
+    requires_expense: bool
+    is_sale_related: bool
+    requires_verification: bool
+    verification_permission: Optional[str]
+    category: str
+    consumption_type: str
+    sort_order: int
+    is_system: bool
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+# ============================================================
 # STOCK MOVEMENT TYPE
 # ============================================================
 
@@ -59,7 +83,8 @@ class ExpenseLinkType:
 class StockMovementType:
     id:            strawberry.ID
     movement_type: str
-    reason:        str
+    reason:        Optional[StockMovementReasonType]
+    reason_code:   Optional[str]  # Legacy field for backward compatibility
     quantity:      float
     group_id:      Optional[str]
     notes:         Optional[str]

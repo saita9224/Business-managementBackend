@@ -12,6 +12,7 @@ from .models import (
     Product,
     ProductPackaging,
     StockMovement,
+    StockMovementReason,
     StockReconciliation,
 )
 
@@ -131,10 +132,36 @@ def _validate_user(user, field_name: str):
         raise ValidationError(f"{field_name} user is required")
 
 
-def _validate_reason(reason: str):
-    valid_reasons = dict(StockMovement.REASONS)
-    if reason not in valid_reasons:
+def _validate_reason(reason: str | StockMovementReason):
+    """
+    Validate reason - supports both old string codes and new StockMovementReason objects.
+    Returns the StockMovementReason object.
+    """
+    if isinstance(reason, StockMovementReason):
+        if not reason.is_active:
+            raise ValidationError(f"Reason '{reason.code}' is inactive")
+        return reason
+    
+    # Legacy string reason support
+    try:
+        reason_obj = StockMovementReason.objects.get(code=reason, is_active=True)
+        return reason_obj
+    except StockMovementReason.DoesNotExist:
         raise ValidationError(f"Invalid stock reason: {reason}")
+
+
+def get_system_reason(code: str) -> StockMovementReason:
+    """
+    Fetch a system stock movement reason by code.
+    Raises ValidationError (not DoesNotExist) if the reason is missing,
+    so callers surface a clean error instead of a 500.
+    """
+    try:
+        return StockMovementReason.objects.get(code=code)
+    except StockMovementReason.DoesNotExist:
+        raise ValidationError(
+            f"Stock movement reason '{code}' is not configured for this business"
+        )
 
 
 # ======================================================
@@ -146,7 +173,7 @@ def add_stock(
     *,
     product:            Product,
     quantity:           float,
-    reason:             str,
+    reason:             str | StockMovementReason,
     performed_by,
     expense_item_id:    int | None = None,
     funded_by_business: bool = True,
@@ -163,20 +190,22 @@ def add_stock(
 
     _validate_quantity(quantity)
     _validate_user(performed_by, "performed_by")
-    _validate_reason(reason)
+    reason_obj = _validate_reason(reason)
 
-    if reason not in {
-        StockMovement.PURCHASE,
-        StockMovement.RETURN,
-        StockMovement.ADJUSTMENT,
-    }:
-        raise ValidationError(f"Reason '{reason}' is not valid for stock IN")
+    # Validate direction using reason's applies_to_in flag
+    if not reason_obj.applies_to_in:
+        raise ValidationError(
+            f"Reason '{reason_obj.code}' cannot be used for stock IN"
+        )
 
-    if (
-        funded_by_business
-        and reason == StockMovement.PURCHASE
-        and expense_item_id is None
-    ):
+    # Validate expense requirement
+    if reason_obj.requires_expense and expense_item_id is None:
+        raise ValidationError(
+            f"Reason '{reason_obj.code}' requires an expense item"
+        )
+
+    # Legacy validation for backward compatibility
+    if reason_obj.code == StockMovement.PURCHASE and funded_by_business and expense_item_id is None:
         raise ValidationError(
             "Business-funded purchases must be linked to an expense item"
         )
@@ -197,7 +226,8 @@ def add_stock(
         product=product,
         quantity=base_quantity,
         movement_type=StockMovement.IN,
-        reason=reason,
+        reason=reason_obj,
+        reason_code=reason_obj.code,  # Keep for backward compatibility
         expense_item=expense_item,
         funded_by_business=funded_by_business,
         performed_by=performed_by,
@@ -217,7 +247,7 @@ def remove_stock(
     *,
     product:      Product,
     quantity:     float,
-    reason:       str,
+    reason:       str | StockMovementReason,
     performed_by,
     group_id:     str | None = None,
     notes:        str | None = None,
@@ -232,16 +262,13 @@ def remove_stock(
 
     _validate_quantity(quantity)
     _validate_user(performed_by, "performed_by")
-    _validate_reason(reason)
+    reason_obj = _validate_reason(reason)
 
-    if reason not in {
-        StockMovement.SALE,
-        StockMovement.COOKING,
-        StockMovement.DAMAGED,
-        StockMovement.LOST,
-        StockMovement.ADJUSTMENT,
-    }:
-        raise ValidationError(f"Reason '{reason}' is not valid for stock OUT")
+    # Validate direction using reason's applies_to_out flag
+    if not reason_obj.applies_to_out:
+        raise ValidationError(
+            f"Reason '{reason_obj.code}' cannot be used for stock OUT"
+        )
 
     base_quantity = to_base_units(product, quantity, packaging)
 
@@ -255,7 +282,8 @@ def remove_stock(
         product=product,
         quantity=base_quantity,
         movement_type=StockMovement.OUT,
-        reason=reason,
+        reason=reason_obj,
+        reason_code=reason_obj.code,  # Keep for backward compatibility
         performed_by=performed_by,
         group_id=group_id,
         notes=notes,
@@ -300,11 +328,15 @@ def add_stock_from_expense(
         existing = StockMovement.objects.filter(client_id=client_id).first()
         if existing:
             return existing
+    # Get PURCHASE reason
+    purchase_reason = get_system_reason(StockMovement.PURCHASE)
+    
     return StockMovement.objects.create(
         product=product,
         quantity=to_base_units(product, quantity, packaging),
         movement_type=StockMovement.IN,
-        reason=StockMovement.PURCHASE,
+        reason=purchase_reason,
+        reason_code=purchase_reason.code,
         expense_item=expense_item,
         funded_by_business=True,
         performed_by=performed_by,
@@ -385,11 +417,15 @@ def create_product_with_stock(
         },
     )
 
+    # Get PURCHASE reason
+    purchase_reason = get_system_reason(StockMovement.PURCHASE)
+    
     movement = StockMovement.objects.create(
         product=product,
         quantity=to_base_units(product, quantity, packaging),
         movement_type=StockMovement.IN,
-        reason=StockMovement.PURCHASE,
+        reason=purchase_reason,
+        reason_code=purchase_reason.code,
         expense_item=expense_item,
         funded_by_business=True,
         performed_by=performed_by,
@@ -429,11 +465,15 @@ def approve_reconciliation(
         else StockMovement.OUT
     )
 
+    # Get ADJUSTMENT reason
+    adjustment_reason = get_system_reason(StockMovement.ADJUSTMENT)
+    
     return StockMovement.objects.create(
         product=reconciliation.product,
         quantity=abs(reconciliation.difference),
         movement_type=movement_type,
-        reason=StockMovement.ADJUSTMENT,
+        reason=adjustment_reason,
+        reason_code=adjustment_reason.code,
         funded_by_business=False,
         performed_by=approved_by,
         group_id=f"recon-{reconciliation.id}",

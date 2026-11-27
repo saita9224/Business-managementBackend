@@ -10,12 +10,13 @@ from asgiref.sync import sync_to_async
 
 from employees.decorators import permission_required
 
-from .models import Product, StockMovement, StockReconciliation, Category
+from .models import Product, StockMovement, StockMovementReason, StockReconciliation, Category
 from .types import (
     ProductType,
     CategoryType,
     CategorySuggestionType,
     StockMovementType,
+    StockMovementReasonType,
     InventoryAuditType,
     StockReconciliationType,
 )
@@ -191,7 +192,7 @@ class InventoryQuery:
         def fetch():
             qs = (
                 StockMovement.objects
-                .select_related("product", "expense_item", "performed_by")
+                .select_related("product", "expense_item", "performed_by", "reason")
                 .order_by("-created_at")
             )
             if product_id:
@@ -278,3 +279,92 @@ class InventoryQuery:
             )
             for r, stock in zip(reconciliations, stock_values)
         ]
+
+    # --------------------------------------------------------
+    # STOCK MOVEMENT REASONS
+    # --------------------------------------------------------
+    @strawberry.field
+    @permission_required("inventory.stock.view")
+    async def stock_movement_reasons(
+        self,
+        info: Info,
+        active_only: bool = True,
+        direction: Optional[str] = None,  # "IN", "OUT", or None for both
+    ) -> List[StockMovementReasonType]:
+        """
+        Get all stock movement reasons for the current tenant.
+        """
+        def fetch():
+            qs = StockMovementReason.objects.all()
+            if active_only:
+                qs = qs.filter(is_active=True)
+            if direction == "IN":
+                qs = qs.filter(applies_to_in=True)
+            elif direction == "OUT":
+                qs = qs.filter(applies_to_out=True)
+            return list(qs.order_by("sort_order", "name"))
+        
+        reasons = await sync_to_async(fetch)()
+        return [
+            StockMovementReasonType(
+                id=r.id,
+                code=r.code,
+                name=r.name,
+                applies_to_in=r.applies_to_in,
+                applies_to_out=r.applies_to_out,
+                requires_expense=r.requires_expense,
+                is_sale_related=r.is_sale_related,
+                requires_verification=r.requires_verification,
+                verification_permission=r.verification_permission,
+                category=r.category,
+                consumption_type=r.consumption_type,
+                sort_order=r.sort_order,
+                is_system=r.is_system,
+                is_active=r.is_active,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+            )
+            for r in reasons
+        ]
+
+    # --------------------------------------------------------
+    # SINGLE STOCK MOVEMENT REASON
+    # --------------------------------------------------------
+    @strawberry.field
+    @permission_required("inventory.stock.view")
+    async def stock_movement_reason(
+        self,
+        info: Info,
+        id: strawberry.ID,
+    ) -> StockMovementReasonType:
+        """
+        Get a single stock movement reason by ID.
+        """
+        def fetch():
+            try:
+                return StockMovementReason.objects.get(pk=id)
+            except StockMovementReason.DoesNotExist:
+                return None
+        
+        reason = await sync_to_async(fetch)()
+        if reason is None:
+            raise GraphQLError("Stock movement reason not found")
+        
+        return StockMovementReasonType(
+            id=reason.id,
+            code=reason.code,
+            name=reason.name,
+            applies_to_in=reason.applies_to_in,
+            applies_to_out=reason.applies_to_out,
+            requires_expense=reason.requires_expense,
+            is_sale_related=reason.is_sale_related,
+            requires_verification=reason.requires_verification,
+            verification_permission=reason.verification_permission,
+            category=reason.category,
+            consumption_type=reason.consumption_type,
+            sort_order=reason.sort_order,
+            is_system=reason.is_system,
+            is_active=reason.is_active,
+            created_at=reason.created_at,
+            updated_at=reason.updated_at,
+        )

@@ -196,12 +196,17 @@ def create_expense_item(
     # 👇 Check if item_name matches an existing inventory product
     matched_product = match_product_by_name(cleaned_item)
     if action in {"ADD_EXISTING", "CREATE_PRODUCT"}:
-        from inventory.services import to_base_units
+        from inventory.services import to_base_units, get_system_reason
+        
+        # Get PURCHASE reason
+        purchase_reason = get_system_reason(StockMovement.PURCHASE)
+        
         StockMovement.objects.create(
             product=product,
             quantity=to_base_units(product, quantity, packaging),
             movement_type=StockMovement.IN,
-            reason=StockMovement.PURCHASE,
+            reason=purchase_reason,
+            reason_code=purchase_reason.code,
             expense_item=expense,
             funded_by_business=True,
             performed_by=performed_by,

@@ -166,7 +166,7 @@ def serialize_stock_movement(sm: StockMovement) -> Dict[str, Any]:
         "product_id": str(sm.product_id),
         "quantity": float(sm.quantity),
         "movement_type": sm.movement_type,
-        "reason": sm.reason,
+        "reason": sm.reason_code,
         "notes": sm.notes,
         "created_at": _to_epoch_ms(sm.created_at),
     }

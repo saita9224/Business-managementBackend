@@ -25,7 +25,7 @@ async def load_movements_by_product(
     movements = await sync_to_async(list)(
         StockMovement.objects
         .filter(product_id__in=keys)
-        .select_related("expense_item", "performed_by")
+        .select_related("expense_item", "performed_by", "reason")
         .order_by("created_at")
     )
 

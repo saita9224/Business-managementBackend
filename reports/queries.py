@@ -371,7 +371,7 @@ class ReportQuery:
                     period_adj=Coalesce(
                         Sum(
                             "quantity",
-                            filter=Q(reason=StockMovement.ADJUSTMENT),
+                            filter=Q(reason_code=StockMovement.ADJUSTMENT),
                         ),
                         ZERO, output_field=DecimalField()
                     ),

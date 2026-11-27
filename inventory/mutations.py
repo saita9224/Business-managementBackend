@@ -9,7 +9,7 @@ from asgiref.sync import sync_to_async
 
 from employees.decorators import permission_required
 
-from .models import Product, StockReconciliation, Category
+from .models import Product, StockReconciliation, Category, StockMovementReason
 from .queries import wrap_product
 from .services import (
     add_stock                  as add_stock_service,
@@ -28,6 +28,7 @@ from .types import (
     ProductPackagingType,
     CategoryType,
     StockMovementType,
+    StockMovementReasonType,
     StockReconciliationType,
 )
 
@@ -110,6 +111,45 @@ class StockCountEntryInput:
 @strawberry.input
 class SubmitReconciliationInput:
     counts: List[StockCountEntryInput]
+
+
+# ============================================================
+# STOCK MOVEMENT REASON INPUT TYPES
+# ============================================================
+
+@strawberry.input
+class CreateStockMovementReasonInput:
+    code: str
+    name: str
+    applies_to_in: bool = False
+    applies_to_out: bool = False
+    requires_expense: bool = False
+    is_sale_related: bool = False
+    requires_verification: bool = False
+    verification_permission: Optional[str] = None
+    category: str = "OTHER"
+    consumption_type: str = "MIXED"
+    sort_order: int = 0
+    linked_menu_item_ids: Optional[List[strawberry.ID]] = None
+    linked_product_ids: Optional[List[strawberry.ID]] = None
+
+
+@strawberry.input
+class UpdateStockMovementReasonInput:
+    reason_id: strawberry.ID
+    name: Optional[str] = None
+    applies_to_in: Optional[bool] = None
+    applies_to_out: Optional[bool] = None
+    requires_expense: Optional[bool] = None
+    is_sale_related: Optional[bool] = None
+    requires_verification: Optional[bool] = None
+    verification_permission: Optional[str] = None
+    category: Optional[str] = None
+    consumption_type: Optional[str] = None
+    sort_order: Optional[int] = None
+    is_active: Optional[bool] = None
+    linked_menu_item_ids: Optional[List[strawberry.ID]] = None
+    linked_product_ids: Optional[List[strawberry.ID]] = None
 
 
 # ============================================================
@@ -553,3 +593,204 @@ class InventoryMutation:
             counted_by=recon.counted_by,
             notes=recon.notes,
         )
+
+    # --------------------------------------------------------
+    # CREATE STOCK MOVEMENT REASON
+    # --------------------------------------------------------
+    @strawberry.mutation
+    @permission_required("inventory.stock.manage_reasons")
+    async def create_stock_movement_reason(
+        self,
+        info:  Info,
+        input: CreateStockMovementReasonInput,
+    ) -> StockMovementReasonType:
+        """
+        Create a custom stock movement reason.
+        Users have full control - no business type restrictions.
+        """
+        # Validate code uniqueness
+        code = input.code.upper().strip()
+        if not code:
+            raise GraphQLError("Reason code is required")
+        
+        def run():
+            if StockMovementReason.objects.filter(code=code).exists():
+                raise ValueError(f"Reason code '{code}' already exists")
+            
+            # Validate at least one direction is set
+            if not input.applies_to_in and not input.applies_to_out:
+                raise ValueError("Reason must apply to IN, OUT, or both")
+            
+            # Validate verification permission if required
+            if input.requires_verification and not input.verification_permission:
+                raise ValueError("Verification permission is required when verification is enabled")
+            
+            reason = StockMovementReason.objects.create(
+                code=code,
+                name=input.name.strip(),
+                applies_to_in=input.applies_to_in,
+                applies_to_out=input.applies_to_out,
+                requires_expense=input.requires_expense,
+                is_sale_related=input.is_sale_related,
+                requires_verification=input.requires_verification,
+                verification_permission=input.verification_permission,
+                category=input.category,
+                consumption_type=input.consumption_type,
+                sort_order=input.sort_order,
+                is_system=False,  # User-created
+                is_active=True,
+            )
+            
+            # Link to menu items and products if provided
+            if input.linked_menu_item_ids:
+                from POS.models import MenuItem
+                menu_items = MenuItem.objects.filter(pk__in=input.linked_menu_item_ids)
+                reason.linked_menu_items.set(menu_items)
+            
+            if input.linked_product_ids:
+                products = Product.objects.filter(pk__in=input.linked_product_ids)
+                reason.linked_products.set(products)
+            
+            return reason
+        
+        try:
+            reason = await sync_to_async(run)()
+        except Exception as e:
+            raise GraphQLError(str(e))
+        
+        return StockMovementReasonType(
+            id=reason.id,
+            code=reason.code,
+            name=reason.name,
+            applies_to_in=reason.applies_to_in,
+            applies_to_out=reason.applies_to_out,
+            requires_expense=reason.requires_expense,
+            is_sale_related=reason.is_sale_related,
+            requires_verification=reason.requires_verification,
+            verification_permission=reason.verification_permission,
+            category=reason.category,
+            consumption_type=reason.consumption_type,
+            sort_order=reason.sort_order,
+            is_system=reason.is_system,
+            is_active=reason.is_active,
+            created_at=reason.created_at,
+            updated_at=reason.updated_at,
+        )
+
+    # --------------------------------------------------------
+    # UPDATE STOCK MOVEMENT REASON
+    # --------------------------------------------------------
+    @strawberry.mutation
+    @permission_required("inventory.stock.manage_reasons")
+    async def update_stock_movement_reason(
+        self,
+        info:  Info,
+        input: UpdateStockMovementReasonInput,
+    ) -> StockMovementReasonType:
+        """
+        Update a stock movement reason.
+        The code cannot be changed; all other fields are updatable.
+        """
+        def run():
+            try:
+                reason = StockMovementReason.objects.get(pk=input.reason_id)
+            except StockMovementReason.DoesNotExist:
+                raise ValueError("Stock movement reason not found")
+            
+            # Update fields
+            if input.name is not None:
+                reason.name = input.name.strip()
+            if input.applies_to_in is not None:
+                reason.applies_to_in = input.applies_to_in
+            if input.applies_to_out is not None:
+                reason.applies_to_out = input.applies_to_out
+            if input.requires_expense is not None:
+                reason.requires_expense = input.requires_expense
+            if input.is_sale_related is not None:
+                reason.is_sale_related = input.is_sale_related
+            if input.requires_verification is not None:
+                reason.requires_verification = input.requires_verification
+            if input.verification_permission is not None:
+                reason.verification_permission = input.verification_permission
+            if input.category is not None:
+                reason.category = input.category
+            if input.consumption_type is not None:
+                reason.consumption_type = input.consumption_type
+            if input.sort_order is not None:
+                reason.sort_order = input.sort_order
+            if input.is_active is not None:
+                reason.is_active = input.is_active
+            
+            reason.save()
+            
+            # Update links if provided
+            if input.linked_menu_item_ids is not None:
+                from POS.models import MenuItem
+                menu_items = MenuItem.objects.filter(pk__in=input.linked_menu_item_ids)
+                reason.linked_menu_items.set(menu_items)
+            
+            if input.linked_product_ids is not None:
+                products = Product.objects.filter(pk__in=input.linked_product_ids)
+                reason.linked_products.set(products)
+            
+            return reason
+        
+        try:
+            reason = await sync_to_async(run)()
+        except Exception as e:
+            raise GraphQLError(str(e))
+        
+        return StockMovementReasonType(
+            id=reason.id,
+            code=reason.code,
+            name=reason.name,
+            applies_to_in=reason.applies_to_in,
+            applies_to_out=reason.applies_to_out,
+            requires_expense=reason.requires_expense,
+            is_sale_related=reason.is_sale_related,
+            requires_verification=reason.requires_verification,
+            verification_permission=reason.verification_permission,
+            category=reason.category,
+            consumption_type=reason.consumption_type,
+            sort_order=reason.sort_order,
+            is_system=reason.is_system,
+            is_active=reason.is_active,
+            created_at=reason.created_at,
+            updated_at=reason.updated_at,
+        )
+
+    # --------------------------------------------------------
+    # DELETE STOCK MOVEMENT REASON
+    # --------------------------------------------------------
+    @strawberry.mutation
+    @permission_required("inventory.stock.manage_reasons")
+    async def delete_stock_movement_reason(
+        self,
+        info: Info,
+        reason_id: strawberry.ID,
+    ) -> bool:
+        """
+        Delete a stock movement reason.
+        Cannot delete system reasons or reasons that have been used.
+        """
+        def run():
+            try:
+                reason = StockMovementReason.objects.get(pk=reason_id)
+            except StockMovementReason.DoesNotExist:
+                raise ValueError("Stock movement reason not found")
+            
+            # Cannot delete system reasons
+            if reason.is_system:
+                raise ValueError("Cannot delete system-generated reasons")
+            
+            # Cannot delete reasons that have been used
+            if reason.movements.exists():
+                raise ValueError("Cannot delete reason that has been used in stock movements")
+            
+            reason.delete()
+            return True
+        
+        try:
+            return await sync_to_async(run)()
+        except Exception as e:
+            raise GraphQLError(str(e))

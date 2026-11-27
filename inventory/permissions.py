@@ -17,6 +17,8 @@ PERMISSIONS = {
     "inventory.stock.view_history",
     "inventory.stock.reconcile",
     "inventory.stock.view_discrepancy",
+    "inventory.stock.manage_reasons",
+    "inventory.stock.verify_movements",
 }
 
 PERMISSION_META = {
@@ -31,4 +33,6 @@ PERMISSION_META = {
     "inventory.stock.view_history":     ("Full Audit Trail",        "Can view complete inventory audit history"),
     "inventory.stock.reconcile":        ("Reconcile Stock",         "Can perform physical stock counts"),
     "inventory.stock.view_discrepancy": ("View Discrepancies",      "Can view stock discrepancy reports"),
+    "inventory.stock.manage_reasons":   ("Manage Stock Reasons",    "Can create, update, and delete stock movement reasons"),
+    "inventory.stock.verify_movements": ("Verify Stock Movements",  "Can verify stock movements that require approval"),
 }

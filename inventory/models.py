@@ -147,6 +147,146 @@ class ProductPackaging(models.Model):
 
 
 # ======================================================
+# STOCK MOVEMENT REASON
+# ======================================================
+
+class StockMovementReason(models.Model):
+    """
+    Tenant-specific stock movement reasons.
+    Users can create custom reasons for tracking why stock moves.
+    """
+    code = models.CharField(
+        max_length=50,
+        unique=True,
+        help_text="Unique identifier for the reason (e.g., 'SALE', 'KITCHEN', 'DAMAGED')"
+    )
+    name = models.CharField(
+        max_length=100,
+        help_text="Display name for the reason"
+    )
+    
+    # Direction flags
+    applies_to_in = models.BooleanField(
+        default=False,
+        help_text="Can this reason be used for stock IN movements?"
+    )
+    applies_to_out = models.BooleanField(
+        default=False,
+        help_text="Can this reason be used for stock OUT movements?"
+    )
+    
+    # Expense linking
+    requires_expense = models.BooleanField(
+        default=False,
+        help_text="Does this reason require linking to an expense item?"
+    )
+    
+    # Sale-related flag
+    is_sale_related = models.BooleanField(
+        default=False,
+        help_text="Is this reason related to sales (for reconciliation)?"
+    )
+    
+    # Verification requirements
+    requires_verification = models.BooleanField(
+        default=False,
+        help_text="Does this reason require manager verification before stock is deducted?"
+    )
+    verification_permission = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Permission code required for verification (e.g., 'inventory.verify_damaged')"
+    )
+    
+    # Reason category
+    REASON_CATEGORIES = [
+        ("SALE", "Sales-related"),
+        ("PRODUCTION", "Production/Recipe"),
+        ("LOSS", "Loss/Damage"),
+        ("ADJUSTMENT", "Stock Adjustment"),
+        ("TRANSFER", "Transfer between locations"),
+        ("OTHER", "Other"),
+    ]
+    category = models.CharField(
+        max_length=20,
+        choices=REASON_CATEGORIES,
+        default="OTHER",
+        help_text="Category for grouping and reporting"
+    )
+    
+    # Recipe linking (for future manual sales reconciliation)
+    linked_menu_items = models.ManyToManyField(
+        "POS.MenuItem",
+        blank=True,
+        related_name="stock_reasons",
+        help_text="Menu items whose recipes this reason represents"
+    )
+    
+    linked_products = models.ManyToManyField(
+        Product,
+        blank=True,
+        related_name="stock_reasons",
+        help_text="Products directly consumed by this reason"
+    )
+    
+    # Consumption type
+    CONSUMPTION_TYPES = [
+        ("RECIPE", "Recipe-based only"),
+        ("DIRECT", "Direct product only"),
+        ("MIXED", "Both recipe and direct"),
+    ]
+    consumption_type = models.CharField(
+        max_length=20,
+        choices=CONSUMPTION_TYPES,
+        default="MIXED",
+        help_text="How this reason consumes inventory"
+    )
+    
+    # Display
+    sort_order = models.IntegerField(
+        default=0,
+        help_text="Display order in lists"
+    )
+    is_system = models.BooleanField(
+        default=False,
+        help_text="System-generated reasons cannot be deleted"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Inactive reasons cannot be used for new movements"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ["sort_order", "name"]
+        verbose_name = "Stock Movement Reason"
+        verbose_name_plural = "Stock Movement Reasons"
+    
+    def __str__(self):
+        return f"{self.name} ({self.code})"
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        # Validate that at least one direction is set
+        if not self.applies_to_in and not self.applies_to_out:
+            raise ValidationError(
+                "Reason must apply to IN, OUT, or both directions"
+            )
+        
+        # Validate verification permission is set if verification is required
+        if self.requires_verification and not self.verification_permission:
+            raise ValidationError(
+                "Verification permission is required when verification is enabled"
+            )
+
+
+# ======================================================
 # STOCK MOVEMENT
 # ======================================================
 
@@ -159,6 +299,7 @@ class StockMovement(models.Model):
         (OUT, "Outgoing"),
     )
 
+    # Legacy constants for backward compatibility during migration
     PURCHASE   = "PURCHASE"
     RETURN     = "RETURN"
     ADJUSTMENT = "ADJUSTMENT"
@@ -187,7 +328,24 @@ class StockMovement(models.Model):
         help_text="Always positive. Direction via movement_type.",
     )
     movement_type = models.CharField(max_length=10, choices=MOVEMENT_TYPES)
-    reason        = models.CharField(max_length=20, choices=REASONS)
+    
+    # NEW: Reference to tenant-specific reason (nullable for backward compatibility)
+    reason = models.ForeignKey(
+        StockMovementReason,
+        on_delete=models.PROTECT,
+        related_name="movements",
+        null=True,
+        blank=True,
+        help_text="The reason for this stock movement"
+    )
+    
+    # Keep legacy reason_code for backward compatibility during migration
+    reason_code = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="Legacy reason code for backward compatibility"
+    )
 
     expense_item = models.ForeignKey(
         "expenses.ExpenseItem",
@@ -231,14 +389,35 @@ class StockMovement(models.Model):
             models.Index(fields=["reason"]),
             models.Index(fields=["created_at"]),
             models.Index(fields=["group_id"]),
+            models.Index(fields=["reason_code"]),  # For backward compatibility queries
         ]
 
     def clean(self):
         if self.quantity <= 0:
             raise ValidationError("Quantity must be greater than zero.")
+        
+        # Validate reason direction (only if reason is set)
+        if self.reason:
+            if self.movement_type == self.IN and not self.reason.applies_to_in:
+                raise ValidationError(
+                    f"Reason '{self.reason.code}' cannot be used for stock IN"
+                )
+            if self.movement_type == self.OUT and not self.reason.applies_to_out:
+                raise ValidationError(
+                    f"Reason '{self.reason.code}' cannot be used for stock OUT"
+                )
+            
+            # Validate reason is active
+            if not self.reason.is_active:
+                raise ValidationError(
+                    f"Reason '{self.reason.code}' is inactive and cannot be used"
+                )
 
     def save(self, *args, **kwargs):
         self.full_clean()
+        # Set reason_code for backward compatibility
+        if self.reason and not self.reason_code:
+            self.reason_code = self.reason.code
         super().save(*args, **kwargs)
         Product.objects.filter(pk=self.product_id).update(updated_at=timezone.now())
 

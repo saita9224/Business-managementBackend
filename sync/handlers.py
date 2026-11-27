@@ -457,15 +457,21 @@ def handle_create_product_with_stock(user, payload, client_id):
     if product.client_id is None:
         product.client_id = client_id
         product.save(update_fields=["client_id"])
-    if product.movements.filter(expense_item=expense, reason="PURCHASE").exists():
+    if product.movements.filter(expense_item=expense, reason_code="PURCHASE").exists():
         return False, {"product_id": product.id}
     from inventory.models import StockMovement
-    from inventory.services import to_base_units
+    from inventory.services import to_base_units, get_system_reason
+    
+    # Get PURCHASE reason
+    purchase_reason = get_system_reason("PURCHASE")
+    
     StockMovement.objects.create(
         product=product,
         quantity=to_base_units(product, payload.get("quantity"), payload.get("packaging")),
         movement_type="IN",
-        reason="PURCHASE", expense_item=expense, funded_by_business=True,
+        reason=purchase_reason,
+        reason_code=purchase_reason.code,
+        expense_item=expense, funded_by_business=True,
         performed_by=user,
     )
     return True, {"product_id": product.id}
